@@ -66,6 +66,26 @@ npm run dev   # or `npm run build` for production
 ```
 Add the `HandleInertiaRequests` middleware and `@routes`/`@inertiaHead`/`@inertia` Blade directives per the [Inertia Laravel adapter docs](https://inertiajs.com/server-side-setup) if not already present in your app.
 
+### CI / Pipeline
+The repo already includes a GitHub Actions workflow at `.github/workflows/tests.yml` that runs on push to `main` and on pull requests.
+
+The pipeline performs:
+- PHP and Composer setup on `php:8.5`
+- Node setup on `node:22`
+- `composer setup` to install dependencies, set up `.env`, migrate the database, and build frontend assets
+- `composer ci:check` to run linting, static analysis, and automated tests
+
+Use these commands locally to mirror CI:
+```bash
+composer setup
+composer ci:check
+composer test
+php artisan test --filter=ScanUploadTest --compact
+npm run build
+```
+
+The scan upload page is covered by `tests/Feature/ScanUploadTest.php`, which validates authenticated access to `/scans/upload` and guest redirect behavior.
+
 ### Not yet implemented
 - Auth scaffolding (`routes/web.php` assumes `auth`/`verified` middleware from your existing setup — Breeze/Fortify/Jetstream, whichever you're using).
 - Scan upload form (currently upload-only via the API; a drag-and-drop `Scans/Create.jsx` would be a natural next addition).

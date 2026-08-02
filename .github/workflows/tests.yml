@@ -1,4 +1,4 @@
-name: tests
+name: CI
 
 on:
   push:
@@ -9,8 +9,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A new push supersedes an in-flight run for the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
+    name: Lint, analyse, test, build
     runs-on: ubuntu-latest
 
     steps:
@@ -30,9 +36,96 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
+          cache: npm
 
-      - name: Setup Application
-        run: composer setup
+      - name: Cache Composer packages
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: vendor
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
 
-      - name: Run CI Checks
-        run: composer ci:check
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # Style, static analysis and the test suite. The suite runs on SQLite
+      # in memory (see phpunit.xml), so no database service is needed.
+      - name: Check code style
+        run: vendor/bin/pint --test --parallel
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse --no-progress
+
+      - name: Tests
+        run: php artisan test --compact
+
+      # The frontend build is the real JS gate: it fails on syntax errors,
+      # unresolved imports and bad Tailwind config, which is most of what
+      # would otherwise reach a browser broken.
+      - name: Build frontend
+        run: npm run build
+
+  self-scan:
+    name: Scan our own source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the SARIF land in the repository's Security tab.
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      # A security tool that will not look at itself is a bad sign. Scans
+      # app/ rather than the whole tree, because the test fixtures contain
+      # deliberately vulnerable code used to prove the rules fire.
+      - name: Scan application source
+        run: |
+          php artisan sast:inspect app \
+            --format=sarif \
+            --output=self-scan.sarif.json \
+            --fail-on=CRITICAL
+
+      - name: Upload SARIF to code scanning
+        # Runs even when the gate above fails, so findings are visible rather
+        # than only a red cross.
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@df559355d593797519d70b90fc8edd5db049e7a2 # v3
+        with:
+          sarif_file: self-scan.sarif.json
+          category: sast-ai-detection
+
+      - name: Keep the report as an artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: self-scan-sarif
+          path: self-scan.sarif.json
+          retention-days: 14

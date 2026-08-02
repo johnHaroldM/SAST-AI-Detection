@@ -86,7 +86,132 @@ npm run build
 
 The scan upload page is covered by `tests/Feature/ScanUploadTest.php`, which validates authenticated access to `/scans/upload` and guest redirect behavior.
 
+---
+
+## Training the model
+
+The classifier starts untrained. Scans still ingest and vectorize during that cold-start phase — findings just queue up unscored until there are enough human labels to fit a model.
+
+```bash
+# 1. Optional: seed a realistic labeled dataset to train against
+php artisan db:seed --class=SastDemoSeeder
+
+# 2. Check how close you are, then train
+php artisan sast:train --sync     # runs in-process, prints the metrics table
+php artisan sast:train            # queues onto `ml-training` instead
+```
+
+Or use the **Model** screen at `/model`, which shows label progress, the last run's precision/recall/F1, the confusion matrix, an F1 trend line across runs, and a Train button.
+
+Training refuses to run unless there are at least `sast.training.min_training_samples` labeled findings **and** both classes are represented — a single-class fit produces a model that answers the same label at full confidence for everything. Both cases raise `InsufficientTrainingDataException`, which the job treats as a skip rather than a failure.
+
+Labels come from triage: every decision in the UI (or `POST /api/findings/{id}/triage`) writes a `TriageFeedback` row, sets `final_label`, and recomputes that rule's rolling false-positive rate, which feeds `historical_fp_rate_rule` back into future feature vectors. Retraining auto-dispatches once `sast.training.retrain_batch_size` new labels accumulate since the last recorded `ModelState`.
+
+### Configuration
+
+Everything tunable lives in [config/sast.php](config/sast.php): training minimums and split ratio, RandomForest hyperparameters, rule noise thresholds, the PR-comment confidence gate (off by default), and the source workspace root.
+
+### Notes for whoever picks this up next
+
+- Rubix's probability method is `proba()`, not `predictProbabilities()`.
+- `Pipeline` transforms its `Dataset` **in place** — calling `predict()` and then `proba()` on the same `Dataset` double-transforms the samples and fails on a dimensionality mismatch. `RubixTriageService::probabilitiesFor()` makes one `proba()` pass and takes the argmax.
+- `findings.rule_id` holds the scanner's native rule string, so `Finding::rule()` joins on `rules.external_id`, not a numeric FK.
+- `routes/api.php` is loaded under the `web` middleware group with an `/api` prefix (see `bootstrap/app.php`) — session auth, CSRF-protected, no Sanctum.
+
+---
+
+## Teaching the model — the triage queue
+
+`/triage` is the labelling workflow. It exists separately from the per-scan view because they answer different questions: a scan page asks *"what is wrong with this commit"*, the queue asks *"give me the next thing to judge"*.
+
+It is **grouped by rule, across every scan**. Judging twenty `hardcoded-secret` findings in a row is faster and far more consistent than alternating between rule types, because you hold one set of criteria in mind at a time. The highest-volume rule is focused by default, so the biggest win is offered first.
+
+| Key | Action |
+|---|---|
+| `J` / `↓` | next finding |
+| `K` / `↑` | previous |
+| `T` | true positive |
+| `F` | false positive |
+| `U` | undo last label |
+
+Each rule shows concrete criteria for what makes it a true or false positive (`TriageGuidance`, keyed on CWE so it also covers findings ingested from external scanners). Decisions save optimistically — a round-trip per label makes a 200-item queue unbearable — and roll back if the server rejects one.
+
+**Undo matters more than it looks.** Labelling at speed means occasional mistakes, and a wrong label is worse than no label: it teaches the classifier the opposite of the truth. `DELETE /api/findings/{id}/triage` removes the feedback row and recomputes the rule's false-positive rate, so retracting a decision leaves no residue in either the training set or the noise stats.
+
+### Getting label quality right
+
+- **Judge on the code, not on the score.** Before the first training run every finding renders as `n/a` rather than `0%`, deliberately: a confidence number from an untrained or badly-trained model anchors your judgement and corrupts the data you are collecting.
+- **Both classes are required.** Training refuses to run on a single-class label set, because a model fitted on one class answers the same label at full confidence for everything.
+- **Bulk-labelling a whole page is legitimate** when a rule is obviously noise in your codebase — that is a real judgement, and the rule-noise loop is built to act on it.
+- **Never auto-label to reach the threshold.** The model would learn to reproduce the scanner's heuristic, making the ML layer an expensive no-op.
+
+---
+
+## Built-in scanner
+
+The app ships its own PHP analyser, so it can produce findings rather than only ingest someone else's report. It writes SARIF and hands off to the normal ingestion pipeline, which means a locally scanned project and a report uploaded from CI take the identical path — one ingestion route, and a portable artifact left on disk.
+
+```bash
+php artisan sast:scan --dry-run          # every project with a source_path, report only
+php artisan sast:scan ELP-Form --sync    # one project, processed inline
+php artisan sast:scan --path=C:/code/app # ad-hoc directory
+```
+
+| Rule | CWE | Severity |
+|---|---|---|
+| `php.laravel.security.sql-injection` | 89 | HIGH |
+| `php.security.command-injection` | 78 | CRITICAL |
+| `php.security.unserialize-user-input` | 502 | CRITICAL |
+| `php.security.path-traversal` | 22 | HIGH |
+| `php.laravel.security.xss-unescaped-output` | 79 | MEDIUM |
+| `php.laravel.security.mass-assignment` | 915 | MEDIUM |
+| `php.security.weak-hashing` | 327 | LOW |
+| `php.security.hardcoded-secret` | 798 | HIGH |
+
+Rules are **syntactic, not a taint analysis** — they match shapes that are frequently vulnerable and accept that many hits will be false positives. That is the whole premise of this application: the ML layer exists to learn which shapes matter in a given codebase, so a consistently noisy rule is more useful here than a clever quiet one. `mass-assignment` and `weak-hashing` are included specifically because they generate false positives for the rule-noise loop to learn from.
+
+Enable, disable or reorder rules in `config/sast.php` under `scanner.rules`; the scanner is constructed from that list in `AppServiceProvider`.
+
+---
+
+## Source workspaces
+
+The app is deployed away from the code it analyses, so source is acquired per scan rather than assumed present. `SourceWorkspaceFactory` picks a provider:
+
+| Provider | When it's used | Cleanup |
+|---|---|---|
+| `LocalPathWorkspace` | `projects.source_path` points at a readable directory, or a checkout is already cached under the workspace root | none — the directory belongs to someone else |
+| `GitCloneWorkspace` | git is enabled and the project has a `vcs_repo_slug` | deletes the checkout, always |
+| `NullWorkspace` | nothing else applies | nothing acquired |
+
+`ProcessScanJob` releases the workspace in a `finally`, so an ephemeral checkout is removed whether the scan succeeded, failed, or threw mid-enrichment.
+
+This is what makes the feature vector real. Without a workspace, `cyclomatic_complexity`, `has_sanitizer_in_ast`, `line_depth_in_function` and `developer_experience_lvl` all fall back to defaults — 4 of the 9 features. Verified against a live clone of `nikic/PHP-Parser`: complexity `10` and depth `21` where the defaults would have been `1` and `0`.
+
+```bash
+# Local development — no credentials needed
+php artisan tinker --execute 'App\Models\Project::find(1)->update(["source_path" => "C:/path/to/repo"]);'
+
+# Hosted — clone per scan
+SAST_WORKSPACE_GIT_ENABLED=true
+SAST_GIT_ALLOWED_HOSTS=github.com,gitlab.com
+SAST_GIT_MAX_SIZE_MB=512
+SAST_GIT_TIMEOUT_SECONDS=300
+```
+
+### Security posture
+
+Cloning third-party code is untrusted input, so the git provider is deliberately narrow:
+
+- **No arbitrary URLs.** The remote is *built* from an allowlisted host plus a strictly validated `owner/repo` slug, which removes the SSRF surface instead of trying to filter it. Slugs containing `..`, `;`, spaces or a scheme are rejected outright.
+- **Tokens never reach argv.** Credentials go through `GIT_CONFIG_*` environment variables, so they don't appear in a process listing. Errors are redacted before logging.
+- **Bounded.** `timeout_seconds` is a budget for the *whole* acquisition, not per git call, so a stalled fetch plus its fallback can't block a worker for double the limit. Oversized checkouts are discarded.
+- **Cleanup can't wander.** `release()` refuses to delete any path whose basename isn't a `scan-*` scratch directory.
+
+Static analysis never *executes* the fetched code, which removes the worst class of risk — but none of the above is optional in a multi-tenant deployment.
+
 ### Not yet implemented
-- Auth scaffolding (`routes/web.php` assumes `auth`/`verified` middleware from your existing setup — Breeze/Fortify/Jetstream, whichever you're using).
-- Scan upload form (currently upload-only via the API; a drag-and-drop `Scans/Create.jsx` would be a natural next addition).
-- `ModelState` history page for the precision/recall trend line mentioned in the `ModelState` model docblock.
+- **Multi-tenancy.** `Project` has no owner, team, or org — every authenticated user sees every project. This is the main blocker before running it as a real SaaS, alongside per-tenant rate limiting and quota on clone size/frequency.
+- **No archive upload provider.** Private repos with no network path from the app can't be scanned; only local paths and git clones are supported.
+- `package.json` is missing the `lint:check` / `format:check` / `types:check` scripts (and their devDependencies) that `composer ci:check` invokes, so the npm half of CI cannot pass. Pint, PHPStan, and the test suite are all green.
+- `Project` has no management UI — create projects via tinker or a seeder before uploading.

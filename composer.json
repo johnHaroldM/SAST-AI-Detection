@@ -65,19 +65,24 @@
         ],
         "ci:check": [
             "Composer\\Config::disableProcessTimeout",
-            "npm run lint:check",
-            "npm run format:check",
-            "npm run types:check",
-            "@test"
+            "@test",
+            "@build",
+            "@scan:self"
         ],
         "types:check": [
             "phpstan analyse"
+        ],
+        "build": [
+            "npm run build"
+        ],
+        "scan:self": [
+            "@php artisan sast:inspect app --format=sarif --output=storage/app/self-scan.sarif.json --fail-on=CRITICAL"
         ],
         "test": [
             "@php artisan config:clear --ansi",
             "@lint:check",
             "@types:check",
-            "@php artisan test"
+            "@php artisan test --compact"
         ],
         "post-autoload-dump": [
             "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",

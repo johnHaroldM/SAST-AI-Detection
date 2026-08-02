@@ -1,4 +1,4 @@
-import AppLayout from '../../Layouts/AppLayout';
+import AppLayout from '../../layouts/AppLayout';
 
 const ACTION_STYLES = {
   suppress: { label: 'Suppress', tone: 'text-signal-red border-signal-red/40 bg-signal-red/10' },

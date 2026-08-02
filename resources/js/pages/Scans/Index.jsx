@@ -1,5 +1,5 @@
 import { Link } from '@inertiajs/react';
-import AppLayout from '../../Layouts/AppLayout';
+import AppLayout from '../../layouts/AppLayout';
 
 /**
  * props.scans: paginated list of scans from ScanDashboardController@index,

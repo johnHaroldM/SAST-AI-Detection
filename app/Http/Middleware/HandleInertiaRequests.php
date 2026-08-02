@@ -41,6 +41,16 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            'flash' => [
+                'success' => fn () => $request->session()->get('success'),
+                'error' => fn () => $request->session()->get('error'),
+                // Only readable moment for a freshly issued upload token —
+                // the database stores nothing but its hash.
+                'ingestToken' => fn () => $request->session()->get('ingestToken'),
+            ],
+            'modelTrained' => fn () => file_exists(
+                storage_path('app/'.config('sast.training.model_path', 'sast_triage_model.rbx'))
+            ),
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
         ];
     }

@@ -1,7 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    './resources/js/**/*.jsx',
+    // The Inertia entry bundles both the SAST .jsx pages and the starter
+    // kit's .tsx auth/settings pages, so both must be scanned or the .tsx
+    // screens render with classes Tailwind never generated.
+    './resources/js/**/*.{js,jsx,ts,tsx}',
     './resources/views/**/*.blade.php',
   ],
   theme: {

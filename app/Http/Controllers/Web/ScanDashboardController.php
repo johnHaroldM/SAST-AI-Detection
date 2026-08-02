@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreScanRequest;
 use App\Models\Project;
 use App\Models\Scan;
+use App\Services\ScanIngestionService;
+use App\Services\Triage\TriageGuidance;
+use Illuminate\Http\RedirectResponse;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -35,11 +39,25 @@ class ScanDashboardController extends Controller
     public function create(): Response
     {
         return Inertia::render('Scans/Upload', [
-            'projects' => Project::orderBy('name')->get(),
+            'projects' => Project::orderBy('name')->get(['id', 'name']),
         ]);
     }
 
-    public function show(Scan $scan): Response
+    /**
+     * Inertia counterpart to ScanController::store(). The SPA needs a
+     * redirect-with-flash response here, not the 202 JSON the API returns,
+     * so the two share validation + dispatch through StoreScanRequest and
+     * ScanIngestionService instead of one calling the other.
+     */
+    public function store(StoreScanRequest $request, ScanIngestionService $ingestion): RedirectResponse
+    {
+        $scan = $ingestion->ingest($request->validated(), $request->file('report'));
+
+        return to_route('scans.show', $scan)
+            ->with('success', 'Report uploaded — parsing and scoring have been queued.');
+    }
+
+    public function show(Scan $scan, TriageGuidance $guidance): Response
     {
         $scan->loadCount([
             'findings',
@@ -56,6 +74,11 @@ class ScanDashboardController extends Controller
         return Inertia::render('Scans/Show', [
             'scan' => $scan,
             'findings' => $findings,
+            // Impact and remediation for each CWE on this page, so a reviewer
+            // can act on a finding without leaving it to look up what it means.
+            'guidance' => $guidance->forMany(
+                collect($findings->items())->pluck('cwe_id')->unique()
+            ),
         ]);
     }
 }

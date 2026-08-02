@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
 import { router } from '@inertiajs/react';
 import axios from 'axios';
-import AppLayout from '../../Layouts/AppLayout';
-import SeverityBadge from '../../Components/SeverityBadge';
-import ConfidenceSignal from '../../Components/ConfidenceSignal';
+import AppLayout from '../../layouts/AppLayout';
+import SeverityBadge from '../../components/SeverityBadge';
+import ConfidenceSignal from '../../components/ConfidenceSignal';
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -21,7 +21,7 @@ const FILTERS = [
  * rather than a full Inertia round-trip — keeps the review flow snappy
  * when working through a long queue.
  */
-export default function ScanShow({ scan, findings: initialFindings }) {
+export default function ScanShow({ scan, findings: initialFindings, guidance = {} }) {
   const [findings, setFindings] = useState(initialFindings.data);
   const [filter, setFilter] = useState('pending');
   const [selected, setSelected] = useState(new Set());
@@ -108,6 +108,7 @@ export default function ScanShow({ scan, findings: initialFindings }) {
             <FindingRow
               key={finding.id}
               finding={finding}
+              advice={guidance[finding.cwe_id ?? 'unknown']}
               expanded={expandedId === finding.id}
               selected={selected.has(finding.id)}
               onToggleExpand={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
@@ -144,7 +145,7 @@ function StatStrip({ scan }) {
   );
 }
 
-function FindingRow({ finding, expanded, selected, onToggleExpand, onToggleSelect, onTriage }) {
+function FindingRow({ finding, advice, expanded, selected, onToggleExpand, onToggleSelect, onTriage }) {
   const isTriaged = finding.status === 'triaged';
 
   return (
@@ -194,10 +195,61 @@ function FindingRow({ finding, expanded, selected, onToggleExpand, onToggleSelec
         </div>
       </div>
 
-      {expanded && finding.raw_snippet && (
-        <pre className="mx-4 mb-3 px-3 py-2.5 bg-ink border border-hairline rounded font-mono text-xs text-fog overflow-x-auto">
-          {finding.raw_snippet}
-        </pre>
+      {expanded && (
+        <div className="mx-4 mb-3 space-y-3">
+          {finding.raw_snippet && (
+            <pre className="px-3 py-2.5 bg-ink border border-hairline rounded font-mono text-xs text-fog overflow-x-auto">
+              {finding.raw_snippet}
+            </pre>
+          )}
+
+          {advice && <Remediation advice={advice} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Impact and fix for the finding's CWE. Shown on expand so the reviewer can
+ * act on a finding without going elsewhere to look up what it means.
+ */
+function Remediation({ advice }) {
+  return (
+    <div className="rounded border border-hairline bg-panel/50 p-3">
+      <div className="kicker mb-2">{advice.title}</div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-amber">Risk</div>
+          <p className="text-xs leading-relaxed text-fog">{advice.risk}</p>
+        </div>
+        <div>
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-signal-green">Fix</div>
+          <p className="text-xs leading-relaxed text-fog">{advice.fix}</p>
+        </div>
+      </div>
+
+      {advice.vulnerable && (
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          <pre className="overflow-x-auto rounded border border-signal-red/30 bg-ink px-3 py-2 font-mono text-[11px] text-fog">
+            {advice.vulnerable}
+          </pre>
+          <pre className="overflow-x-auto rounded border border-signal-green/30 bg-ink px-3 py-2 font-mono text-[11px] text-fog">
+            {advice.secure}
+          </pre>
+        </div>
+      )}
+
+      {advice.reference && (
+        <a
+          href={advice.reference}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="mt-2 inline-block font-mono text-[11px] text-amber hover:underline"
+        >
+          Reference ↗
+        </a>
       )}
     </div>
   );

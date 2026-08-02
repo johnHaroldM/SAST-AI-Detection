@@ -14,7 +14,10 @@
   }
 
   :focus-visible {
-    outline: 2px solid theme('colors.amber.500');
+    /* `amber` is a flat token in tailwind.config.js, not a scale — the
+       `colors.amber.500` form resolved to nothing and Tailwind dropped the
+       rule, leaving the app with no visible focus ring. */
+    outline: 2px solid theme('colors.amber');
     outline-offset: 2px;
   }
 }

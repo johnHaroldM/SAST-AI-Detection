@@ -21,7 +21,7 @@ class ProjectFactory extends Factory
     {
         return [
             'name' => fake()->company(),
-            'vcs_repo_slug' => fake()->userName() . '/' . fake()->word(),
+            'vcs_repo_slug' => fake()->userName().'/'.fake()->word(),
             'vcs_access_token' => null,
         ];
     }

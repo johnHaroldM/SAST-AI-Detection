@@ -22,18 +22,28 @@ class PostPrCommentsJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    private const CONFIDENCE_THRESHOLD = 0.80;
-
     public int $tries = 5;
+
+    /** @var list<int> */
     public array $backoff = [10, 30, 60, 120, 300];
 
     public function __construct(public Scan $scan) {}
 
     public function handle(): void
     {
+        $project = $this->scan->project;
+
+        if ($project === null || blank($project->vcs_repo_slug) || blank($project->vcs_access_token)) {
+            Log::info('Skipping PR comments — project has no VCS credentials configured.', [
+                'scan_id' => $this->scan->id,
+            ]);
+
+            return;
+        }
+
         $candidates = $this->scan->findings()
             ->where('predicted_label', 'true_positive')
-            ->where('tp_probability', '>', self::CONFIDENCE_THRESHOLD)
+            ->where('tp_probability', '>', (float) config('sast.pr_comments.confidence_threshold', 0.80))
             ->where('status', 'pending')
             ->get();
 
@@ -41,11 +51,8 @@ class PostPrCommentsJob implements ShouldQueue
             return;
         }
 
-        $repo = $this->scan->project->vcs_repo_slug; // e.g. "org/repo"
-        $token = decrypt($this->scan->project->vcs_access_token);
-
         foreach ($candidates as $finding) {
-            $this->postComment($repo, $token, $finding);
+            $this->postComment((string) $project->vcs_repo_slug, (string) $project->vcs_access_token, $finding);
         }
     }
 
@@ -65,6 +72,7 @@ class PostPrCommentsJob implements ShouldQueue
                 'finding_id' => $finding->id,
                 'status' => $response->status(),
             ]);
+
             return;
         }
 

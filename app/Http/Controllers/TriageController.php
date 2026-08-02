@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Jobs\TrainSastModelJob;
 use App\Models\Finding;
+use App\Models\ModelState;
+use App\Models\Rule;
 use App\Models\TriageFeedback;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,17 +30,17 @@ class TriageController extends Controller
     {
         $validated = $request->validate([
             'corrected_label' => ['required', ValidationRule::in(['true_positive', 'false_positive'])],
-            'notes'           => ['nullable', 'string', 'max:2000'],
+            'notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
         DB::transaction(function () use ($finding, $validated, $request) {
             TriageFeedback::create([
-                'finding_id'            => $finding->id,
-                'user_id'               => $request->user()->id,
-                'original_prediction'   => $finding->predicted_label,
-                'original_probability'  => $finding->tp_probability,
-                'corrected_label'       => $validated['corrected_label'],
-                'notes'                 => $validated['notes'] ?? null,
+                'finding_id' => $finding->id,
+                'user_id' => $request->user()->id,
+                'original_prediction' => $finding->predicted_label,
+                'original_probability' => $finding->tp_probability,
+                'corrected_label' => $validated['corrected_label'],
+                'notes' => $validated['notes'] ?? null,
             ]);
 
             $finding->final_label = $validated['corrected_label'];
@@ -53,6 +55,33 @@ class TriageController extends Controller
         return response()->json([
             'finding_id' => $finding->id,
             'final_label' => $finding->final_label,
+            'status' => $finding->status,
+        ]);
+    }
+
+    /**
+     * DELETE /api/findings/{finding}/triage
+     *
+     * Retracts a decision. Labelling at speed means occasionally mislabelling,
+     * and a wrong label is worse than no label — it teaches the classifier the
+     * opposite of the truth. Removing the feedback row and recomputing the
+     * rule's FP rate keeps the training set and the noise stats honest.
+     */
+    public function destroy(Finding $finding): JsonResponse
+    {
+        DB::transaction(function () use ($finding) {
+            $finding->feedback()->delete();
+
+            $finding->final_label = null;
+            $finding->status = 'pending';
+            $finding->save();
+
+            $finding->rule?->recalculateFpRate();
+        });
+
+        return response()->json([
+            'finding_id' => $finding->id,
+            'final_label' => null,
             'status' => $finding->status,
         ]);
     }
@@ -80,16 +109,16 @@ class TriageController extends Controller
 
             foreach ($validated['decisions'] as $decision) {
                 $finding = $findings->get($decision['finding_id']);
-                if (!$finding) {
+                if (! $finding) {
                     continue;
                 }
 
                 TriageFeedback::create([
-                    'finding_id'           => $finding->id,
-                    'user_id'              => $request->user()->id,
-                    'original_prediction'  => $finding->predicted_label,
+                    'finding_id' => $finding->id,
+                    'user_id' => $request->user()->id,
+                    'original_prediction' => $finding->predicted_label,
                     'original_probability' => $finding->tp_probability,
-                    'corrected_label'      => $decision['corrected_label'],
+                    'corrected_label' => $decision['corrected_label'],
                 ]);
 
                 $finding->final_label = $decision['corrected_label'];
@@ -100,9 +129,12 @@ class TriageController extends Controller
             }
         });
 
-        foreach (array_keys($affectedRuleIds) as $ruleId) {
-            \App\Models\Rule::find($ruleId)?->recalculateFpRate();
-        }
+        // findings.rule_id holds the scanner's native rule identifier, so
+        // these are looked up by external_id — Rule::find() would treat
+        // them as primary keys and silently match nothing.
+        Rule::whereIn('external_id', array_keys($affectedRuleIds))
+            ->get()
+            ->each->recalculateFpRate();
 
         $this->maybeTriggerRetraining();
 
@@ -111,19 +143,37 @@ class TriageController extends Controller
 
     /**
      * Dispatch a background retraining job once enough new labeled
-     * examples have accumulated. Cheap COUNT query gated behind a cache
-     * lock so concurrent triage requests don't all trigger retraining.
+     * examples have accumulated *since the last training run*. Cheap COUNT
+     * query gated behind a cache lock so concurrent triage requests don't
+     * all trigger retraining.
+     *
+     * Anchoring on the last ModelState matters: counting labels within a
+     * rolling window instead means that once the threshold is crossed,
+     * every subsequent triage re-triggers training for as long as the
+     * window holds, regardless of how little new signal has arrived.
      */
     private function maybeTriggerRetraining(): void
     {
-        $newLabelsSinceLastTrain = Finding::whereNotNull('final_label')
-            ->where('updated_at', '>=', now()->subDay())
+        $lastTrainedAt = ModelState::max('trained_at');
+
+        $newLabels = Finding::query()
+            ->whereNotNull('final_label')
+            ->when($lastTrainedAt, fn ($query) => $query->where('updated_at', '>', $lastTrainedAt))
             ->count();
 
-        if ($newLabelsSinceLastTrain >= self::RETRAIN_BATCH_SIZE
-            && cache()->add('sast:retrain-lock', true, now()->addMinutes(30))
-        ) {
-            TrainSastModelJob::dispatch()->onQueue('ml-training');
+        if ($newLabels < $this->retrainBatchSize()) {
+            return;
         }
+
+        if (! cache()->add('sast:retrain-lock', true, now()->addMinutes(30))) {
+            return;
+        }
+
+        TrainSastModelJob::dispatch()->onQueue('ml-training');
+    }
+
+    private function retrainBatchSize(): int
+    {
+        return max(1, (int) config('sast.training.retrain_batch_size', self::RETRAIN_BATCH_SIZE));
     }
 }

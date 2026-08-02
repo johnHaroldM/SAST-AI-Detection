@@ -2,11 +2,15 @@
 
 namespace App\Models;
 
+use Database\Factories\FindingFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Finding extends Model
 {
+    /** @use HasFactory<FindingFactory> */
     use HasFactory;
 
     protected $fillable = [
@@ -28,20 +32,36 @@ class Finding extends Model
     protected $casts = [
         'feature_vector' => 'array',
         'tp_probability' => 'float',
-        'line_number'    => 'integer',
+        'line_number' => 'integer',
     ];
 
-    public function scan()
+    /**
+     * @return BelongsTo<Scan, $this>
+     */
+    public function scan(): BelongsTo
     {
         return $this->belongsTo(Scan::class);
     }
 
-    public function rule()
+    /**
+     * findings.rule_id stores the scanner's *native* rule identifier
+     * (e.g. "php.laravel.security.sql-injection"), not a numeric FK, so
+     * this relation joins against rules.external_id. Getting this wrong
+     * silently nulls out every rule lookup and freezes the
+     * historical_fp_rate_rule feature at 0.0 for the whole dataset.
+     */
+    /**
+     * @return BelongsTo<Rule, $this>
+     */
+    public function rule(): BelongsTo
     {
-        return $this->belongsTo(Rule::class);
+        return $this->belongsTo(Rule::class, 'rule_id', 'external_id');
     }
 
-    public function feedback()
+    /**
+     * @return HasOne<TriageFeedback, $this>
+     */
+    public function feedback(): HasOne
     {
         return $this->hasOne(TriageFeedback::class);
     }

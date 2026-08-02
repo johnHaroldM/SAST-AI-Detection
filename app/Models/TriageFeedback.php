@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class TriageFeedback extends Model
 {
@@ -15,7 +16,10 @@ class TriageFeedback extends Model
         'notes',
     ];
 
-    public function finding()
+    /**
+     * @return BelongsTo<Finding, $this>
+     */
+    public function finding(): BelongsTo
     {
         return $this->belongsTo(Finding::class);
     }

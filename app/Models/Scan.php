@@ -2,11 +2,15 @@
 
 namespace App\Models;
 
+use Database\Factories\ScanFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Scan extends Model
 {
+    /** @use HasFactory<ScanFactory> */
     use HasFactory;
 
     protected $fillable = [
@@ -20,7 +24,18 @@ class Scan extends Model
         'suppressed_count',
     ];
 
-    public function findings()
+    /**
+     * @return BelongsTo<Project, $this>
+     */
+    public function project(): BelongsTo
+    {
+        return $this->belongsTo(Project::class);
+    }
+
+    /**
+     * @return HasMany<Finding, $this>
+     */
+    public function findings(): HasMany
     {
         return $this->hasMany(Finding::class);
     }

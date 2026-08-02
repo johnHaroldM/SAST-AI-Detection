@@ -2,13 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ProcessScanJob;
+use App\Http\Requests\StoreScanRequest;
 use App\Models\Scan;
+use App\Services\ScanIngestionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use Illuminate\Validation\Rule as ValidationRule;
 
 class ScanController extends Controller
 {
@@ -19,32 +17,13 @@ class ScanController extends Controller
      * parsing, feature extraction, and ML scoring all happen in the queue
      * so this endpoint stays fast even for large monorepo scans.
      */
-    public function store(Request $request): JsonResponse
+    public function store(StoreScanRequest $request, ScanIngestionService $ingestion): JsonResponse
     {
-        $validated = $request->validate([
-            'project_id'  => ['required', 'integer', 'exists:projects,id'],
-            'source'      => ['required', ValidationRule::in(['semgrep', 'sonarqube', 'bandit', 'phpcs', 'sarif'])],
-            'commit_sha'  => ['required', 'string', 'size:40'],
-            'branch'      => ['required', 'string', 'max:255'],
-            'report'      => ['required', 'file', 'mimes:json,sarif', 'max:51200'], // 50MB cap
-        ]);
-
-        $storedPath = $request->file('report')->store('sast-reports/' . $validated['project_id']);
-
-        $scan = Scan::create([
-            'project_id'      => $validated['project_id'],
-            'source'          => $validated['source'],
-            'commit_sha'      => $validated['commit_sha'],
-            'branch'          => $validated['branch'],
-            'raw_report_path' => $storedPath,
-            'status'          => 'uploaded',
-        ]);
-
-        ProcessScanJob::dispatch($scan);
+        $scan = $ingestion->ingest($request->validated(), $request->file('report'));
 
         return response()->json([
             'scan_id' => $scan->id,
-            'status'  => $scan->status,
+            'status' => $scan->status,
             'message' => 'Scan queued for AST enrichment and ML triage.',
         ], 202);
     }

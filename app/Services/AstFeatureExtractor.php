@@ -2,11 +2,11 @@
 
 namespace App\Services;
 
-use App\Models\Finding;
 use PhpParser\Error;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
+use PhpParser\Parser;
 use PhpParser\ParserFactory;
 
 /**
@@ -18,7 +18,7 @@ use PhpParser\ParserFactory;
  */
 class AstFeatureExtractor
 {
-    private $parser;
+    private Parser $parser;
 
     // Functions we treat as "sanitizers" for the purpose of the FP heuristic.
     // In production this list would be config-driven and CWE-specific
@@ -37,7 +37,7 @@ class AstFeatureExtractor
 
     public function __construct()
     {
-        $this->parser = (new ParserFactory())->createForNewestSupportedVersion();
+        $this->parser = (new ParserFactory)->createForNewestSupportedVersion();
     }
 
     /**
@@ -54,22 +54,26 @@ class AstFeatureExtractor
     public function extract(string $absoluteFilePath, int $lineNumber): array
     {
         $defaults = [
-            'cyclomatic_complexity'  => 1,
-            'has_sanitizer_in_ast'   => 0,
+            'cyclomatic_complexity' => 1,
+            'has_sanitizer_in_ast' => 0,
             'line_depth_in_function' => 0,
-            'is_test_file'           => $this->isTestFile($absoluteFilePath) ? 1 : 0,
-            'file_extension'         => $this->normalizedExtension($absoluteFilePath),
+            'is_test_file' => $this->isTestFile($absoluteFilePath) ? 1 : 0,
+            'file_extension' => $this->normalizedExtension($absoluteFilePath),
         ];
 
-        if (!is_readable($absoluteFilePath)) {
+        if (! is_readable($absoluteFilePath)) {
             return $defaults;
         }
 
         $code = file_get_contents($absoluteFilePath);
 
+        if ($code === false) {
+            return $defaults;
+        }
+
         try {
             $ast = $this->parser->parse($code);
-        } catch (Error $e) {
+        } catch (Error) {
             // Unparseable file (e.g. pure Blade template) — fall back to defaults.
             return $defaults;
         }
@@ -85,32 +89,29 @@ class AstFeatureExtractor
         }
 
         return [
-            'cyclomatic_complexity'  => $this->cyclomaticComplexity($enclosingFunction),
-            'has_sanitizer_in_ast'   => $this->containsSanitizerCall($enclosingFunction) ? 1 : 0,
+            'cyclomatic_complexity' => $this->cyclomaticComplexity($enclosingFunction),
+            'has_sanitizer_in_ast' => $this->containsSanitizerCall($enclosingFunction) ? 1 : 0,
             'line_depth_in_function' => $lineNumber - $enclosingFunction->getStartLine(),
-            'is_test_file'           => $defaults['is_test_file'],
-            'file_extension'         => $defaults['file_extension'],
+            'is_test_file' => $defaults['is_test_file'],
+            'file_extension' => $defaults['file_extension'],
         ];
     }
 
     /**
      * Walk the AST to find the function/method/closure body that contains
      * the target line number. Returns the tightest enclosing scope.
+     *
+     * @param  array<int, Node>  $ast
      */
     private function findEnclosingFunction(array $ast, int $lineNumber): ?Node
     {
-        $found = null;
-
-        $visitor = new class($lineNumber, $found) extends NodeVisitorAbstract {
-            private int $lineNumber;
+        $visitor = new class($lineNumber) extends NodeVisitorAbstract
+        {
             public ?Node $match = null;
 
-            public function __construct(int $lineNumber)
-            {
-                $this->lineNumber = $lineNumber;
-            }
+            public function __construct(private int $lineNumber) {}
 
-            public function enterNode(Node $node)
+            public function enterNode(Node $node): ?Node
             {
                 $isScope = $node instanceof Node\Stmt\ClassMethod
                     || $node instanceof Node\Stmt\Function_
@@ -124,10 +125,12 @@ class AstFeatureExtractor
                     // Prefer the innermost (most recently matched, still-enclosing) scope.
                     $this->match = $node;
                 }
+
+                return null;
             }
         };
 
-        $traverser = new NodeTraverser();
+        $traverser = new NodeTraverser;
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
@@ -142,10 +145,11 @@ class AstFeatureExtractor
     {
         $complexity = 1;
 
-        $visitor = new class extends NodeVisitorAbstract {
+        $visitor = new class extends NodeVisitorAbstract
+        {
             public int $count = 0;
 
-            public function enterNode(Node $node)
+            public function enterNode(Node $node): ?Node
             {
                 if ($node instanceof Node\Stmt\If_
                     || $node instanceof Node\Stmt\ElseIf_
@@ -161,10 +165,12 @@ class AstFeatureExtractor
                 ) {
                     $this->count++;
                 }
+
+                return null;
             }
         };
 
-        $traverser = new NodeTraverser();
+        $traverser = new NodeTraverser;
         $traverser->addVisitor($visitor);
         $traverser->traverse([$functionNode]);
 
@@ -177,12 +183,11 @@ class AstFeatureExtractor
      */
     private function containsSanitizerCall(Node $functionNode): bool
     {
-        $found = false;
-
-        $visitor = new class($found) extends NodeVisitorAbstract {
+        $visitor = new class extends NodeVisitorAbstract
+        {
             public bool $found = false;
 
-            public function enterNode(Node $node)
+            public function enterNode(Node $node): ?Node
             {
                 if ($node instanceof Node\Expr\FuncCall
                     && $node->name instanceof Node\Name
@@ -201,10 +206,12 @@ class AstFeatureExtractor
                         $this->found = true;
                     }
                 }
+
+                return null;
             }
         };
 
-        $traverser = new NodeTraverser();
+        $traverser = new NodeTraverser;
         $traverser->addVisitor($visitor);
         $traverser->traverse([$functionNode]);
 
@@ -222,6 +229,7 @@ class AstFeatureExtractor
         if (str_ends_with($path, '.blade.php')) {
             return 'blade.php';
         }
+
         return pathinfo($path, PATHINFO_EXTENSION) ?: 'unknown';
     }
 }

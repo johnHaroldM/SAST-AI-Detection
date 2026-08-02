@@ -14,12 +14,12 @@ class ReportParserFactory
     public function make(string $source): ScannerReportParser
     {
         return match ($source) {
-            'sarif'      => new SarifReportParser(),
-            'semgrep'    => new SemgrepReportParser(),
-            'sonarqube'  => new SonarQubeReportParser(),
-            'bandit'     => new BanditReportParser(),
-            'phpcs'      => new PhpcsReportParser(),
-            default      => throw new \InvalidArgumentException("Unsupported scanner source: {$source}"),
+            'sarif' => new SarifReportParser,
+            'semgrep' => new SemgrepReportParser,
+            'sonarqube' => new SonarQubeReportParser,
+            'bandit' => new BanditReportParser,
+            'phpcs' => new PhpcsReportParser,
+            default => throw new \InvalidArgumentException("Unsupported scanner source: {$source}"),
         };
     }
 }

@@ -34,6 +34,7 @@ class SemgrepReportParser implements ScannerReportParser
         if ($value && preg_match('/CWE-(\d+)/i', (string) $value, $m)) {
             return (int) $m[1];
         }
+
         return null;
     }
 }

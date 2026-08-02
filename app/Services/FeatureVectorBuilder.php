@@ -27,29 +27,51 @@ class FeatureVectorBuilder
      * Build and persist the feature_vector column for a single Finding.
      * $projectRoot is the absolute path to the checked-out repo so the
      * AST extractor can resolve $finding->file_path on disk.
+     *
+     * @return array<string, mixed>
      */
     public function build(Finding $finding, string $projectRoot): array
     {
-        $absolutePath = rtrim($projectRoot, '/') . '/' . ltrim($finding->file_path, '/');
+        return $this->buildWithRule($finding, $projectRoot, $this->resolveRule($finding));
+    }
+
+    /**
+     * Batch variant used by ProcessScanJob — resolves each distinct rule
+     * once per scan instead of once per finding, which matters because a
+     * single scan routinely produces hundreds of hits on the same rule.
+     *
+     * @param  iterable<Finding>  $findings
+     */
+    public function buildBatch(iterable $findings, string $projectRoot): void
+    {
+        $ruleCache = [];
+
+        foreach ($findings as $finding) {
+            $ruleCache[$finding->rule_id] ??= $this->resolveRule($finding);
+
+            $this->buildWithRule($finding, $projectRoot, $ruleCache[$finding->rule_id]);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildWithRule(Finding $finding, string $projectRoot, Rule $rule): array
+    {
+        $absolutePath = rtrim($projectRoot, '/\\').DIRECTORY_SEPARATOR.ltrim($finding->file_path, '/\\');
 
         $astFeatures = $this->astExtractor->extract($absolutePath, $finding->line_number);
-
-        $rule = Rule::firstOrCreate(
-            ['external_id' => $finding->rule_id],
-            ['cwe_id' => $finding->cwe_id, 'historical_fp_rate' => 0.0]
-        );
-
         $authorLevel = $this->authorResolver->resolve($absolutePath, $finding->line_number);
 
         $vector = [
-            'cwe_id'                   => (int) $finding->cwe_id,
-            'scanner_severity'         => strtoupper($finding->severity),
-            'file_extension'           => $astFeatures['file_extension'],
-            'is_test_file'             => $astFeatures['is_test_file'],
-            'cyclomatic_complexity'    => $astFeatures['cyclomatic_complexity'],
-            'has_sanitizer_in_ast'     => $astFeatures['has_sanitizer_in_ast'],
-            'line_depth_in_function'   => $astFeatures['line_depth_in_function'],
-            'historical_fp_rate_rule'  => $rule->historical_fp_rate,
+            'cwe_id' => (int) $finding->cwe_id,
+            'scanner_severity' => strtoupper((string) $finding->severity),
+            'file_extension' => $astFeatures['file_extension'],
+            'is_test_file' => $astFeatures['is_test_file'],
+            'cyclomatic_complexity' => $astFeatures['cyclomatic_complexity'],
+            'has_sanitizer_in_ast' => $astFeatures['has_sanitizer_in_ast'],
+            'line_depth_in_function' => $astFeatures['line_depth_in_function'],
+            'historical_fp_rate_rule' => (float) $rule->historical_fp_rate,
             'developer_experience_lvl' => $authorLevel,
         ];
 
@@ -59,24 +81,11 @@ class FeatureVectorBuilder
         return $vector;
     }
 
-    /**
-     * Batch variant used by ProcessScanJob — avoids N+1 rule lookups by
-     * caching Rule instances per rule_id within a single scan.
-     */
-    public function buildBatch(iterable $findings, string $projectRoot): void
+    private function resolveRule(Finding $finding): Rule
     {
-        $ruleCache = [];
-
-        foreach ($findings as $finding) {
-            /** @var Finding $finding */
-            if (!isset($ruleCache[$finding->rule_id])) {
-                $ruleCache[$finding->rule_id] = Rule::firstOrCreate(
-                    ['external_id' => $finding->rule_id],
-                    ['cwe_id' => $finding->cwe_id, 'historical_fp_rate' => 0.0]
-                );
-            }
-
-            $this->build($finding, $projectRoot);
-        }
+        return Rule::firstOrCreate(
+            ['external_id' => $finding->rule_id],
+            ['cwe_id' => $finding->cwe_id, 'historical_fp_rate' => 0.0]
+        );
     }
 }

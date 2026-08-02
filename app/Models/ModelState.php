@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use Database\Factories\ModelStateFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -11,6 +13,9 @@ use Illuminate\Database\Eloquent\Model;
  */
 class ModelState extends Model
 {
+    /** @use HasFactory<ModelStateFactory> */
+    use HasFactory;
+
     protected $fillable = [
         'trained_at', 'sample_size', 'precision', 'recall', 'f1_score', 'confusion_matrix',
     ];

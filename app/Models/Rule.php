@@ -2,10 +2,16 @@
 
 namespace App\Models;
 
+use Database\Factories\RuleFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Rule extends Model
 {
+    /** @use HasFactory<RuleFactory> */
+    use HasFactory;
+
     protected $fillable = [
         'external_id',        // scanner's native rule ID, e.g. "php.laravel.security.sql-injection"
         'cwe_id',
@@ -20,9 +26,15 @@ class Rule extends Model
         'historical_fp_rate' => 'float',
     ];
 
-    public function findings()
+    /**
+     * Mirrors Finding::rule() — joined on the scanner's native rule
+     * identifier, not a numeric foreign key.
+     *
+     * @return HasMany<Finding, $this>
+     */
+    public function findings(): HasMany
     {
-        return $this->hasMany(Finding::class);
+        return $this->hasMany(Finding::class, 'rule_id', 'external_id');
     }
 
     /**
@@ -38,15 +50,28 @@ class Rule extends Model
         $this->total_seen = $total;
         $this->total_false_positive = $fp;
         $this->historical_fp_rate = $total > 0 ? round($fp / $total, 4) : 0.0;
-
-        if ($this->historical_fp_rate > 0.70 && $total >= 20) {
-            $this->recommended_action = 'review_config';
-        } elseif ($this->historical_fp_rate > 0.85 && $total >= 20) {
-            $this->recommended_action = 'suppress';
-        } else {
-            $this->recommended_action = null;
-        }
+        $this->recommended_action = $this->resolveRecommendedAction($total);
 
         $this->save();
+    }
+
+    /**
+     * Thresholds are checked highest-first — the previous order meant the
+     * 'review_config' branch swallowed every rule and 'suppress' could
+     * never be reached.
+     *
+     * @return 'suppress'|'review_config'|null
+     */
+    private function resolveRecommendedAction(int $totalTriaged): ?string
+    {
+        if ($totalTriaged < (int) config('sast.rules.min_samples', 20)) {
+            return null;
+        }
+
+        return match (true) {
+            $this->historical_fp_rate > (float) config('sast.rules.suppress_fp_rate', 0.85) => 'suppress',
+            $this->historical_fp_rate > (float) config('sast.rules.review_fp_rate', 0.70) => 'review_config',
+            default => null,
+        };
     }
 }

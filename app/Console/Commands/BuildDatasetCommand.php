@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Finding;
 use App\Services\FeatureVectorBuilder;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * Backfills feature_vector for any findings that predate the ML pipeline
@@ -32,18 +33,20 @@ class BuildDatasetCommand extends Command
 
         if ($total === 0) {
             $this->info('No findings require feature vector backfill.');
+
             return self::SUCCESS;
         }
 
         $bar = $this->output->createProgressBar($total);
         $bar->start();
 
-        $query->chunkById((int) $this->option('chunk'), function ($findings) use ($vectorBuilder, $bar) {
-            $byProject = $findings->groupBy(fn (Finding $f) => $f->scan->project_id);
+        $workspaceRoot = rtrim((string) config('sast.workspace_root', storage_path('app/workspaces')), '/\\');
+
+        $query->chunkById((int) $this->option('chunk'), function (Collection $findings) use ($vectorBuilder, $bar, $workspaceRoot) {
+            $byProject = $findings->groupBy(fn (Finding $f): int => (int) $f->scan->project_id);
 
             foreach ($byProject as $projectId => $projectFindings) {
-                $projectRoot = storage_path("app/workspaces/{$projectId}/backfill");
-                $vectorBuilder->buildBatch($projectFindings, $projectRoot);
+                $vectorBuilder->buildBatch($projectFindings, "{$workspaceRoot}/{$projectId}");
                 $bar->advance($projectFindings->count());
             }
         });

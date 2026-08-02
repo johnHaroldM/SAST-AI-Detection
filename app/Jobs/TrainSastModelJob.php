@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\InsufficientTrainingDataException;
 use App\Models\ModelState;
 use App\Services\RubixTriageService;
 use Illuminate\Bus\Queueable;
@@ -23,6 +24,7 @@ class TrainSastModelJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 1; // don't silently retry a failed training run
+
     public int $timeout = 1800;
 
     public function handle(RubixTriageService $triageService): void
@@ -42,6 +44,9 @@ class TrainSastModelJob implements ShouldQueue
             ]);
 
             Log::info('SAST model retraining complete.', $metrics);
+        } catch (InsufficientTrainingDataException $e) {
+            // Expected during cold start — not a failure worth alerting on.
+            Log::info('SAST model retraining skipped.', ['reason' => $e->getMessage()]);
         } finally {
             cache()->forget('sast:retrain-lock');
         }

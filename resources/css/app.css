@@ -1,0 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-ink text-paper font-sans antialiased;
+  }
+
+  ::selection {
+    @apply bg-amber/30 text-paper;
+  }
+
+  :focus-visible {
+    /* `amber` is a flat token in tailwind.config.js, not a scale — the
+       `colors.amber.500` form resolved to nothing and Tailwind dropped the
+       rule, leaving the app with no visible focus ring. */
+    outline: 2px solid theme('colors.amber');
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .kicker {
+    @apply font-mono text-[11px] uppercase tracking-[0.14em] text-fog;
+  }
+}

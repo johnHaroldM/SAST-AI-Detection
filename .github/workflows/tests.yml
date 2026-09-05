@@ -64,14 +64,13 @@ jobs:
       - name: Static analysis
         run: vendor/bin/phpstan analyse --no-progress
 
-      - name: Tests
-        run: php artisan test --compact
-
-      # The frontend build is the real JS gate: it fails on syntax errors,
-      # unresolved imports and bad Tailwind config, which is most of what
-      # would otherwise reach a browser broken.
+      # Build before the Laravel test suite because Inertia views use @vite,
+      # and the tests need public/build/manifest.json to exist.
       - name: Build frontend
         run: npm run build
+
+      - name: Tests
+        run: php artisan test --compact
 
   self-scan:
     name: Scan our own source

@@ -56,8 +56,10 @@ jobs:
           cp .env.example .env
           php artisan key:generate
 
-      # Style, static analysis and the test suite. The suite runs on SQLite
-      # in memory (see phpunit.xml), so no database service is needed.
+      - name: Generate frontend routes
+        run: php artisan wayfinder:generate
+
+      # Style and static analysis.
       - name: Check code style
         run: vendor/bin/pint --test --parallel
 
@@ -69,12 +71,15 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # The suite runs on SQLite in memory (see phpunit.xml),
+      # so no database service is needed.
       - name: Tests
         run: php artisan test --compact
 
   self-scan:
     name: Scan our own source
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       # Lets the SARIF land in the repository's Security tab.
@@ -101,9 +106,9 @@ jobs:
           cp .env.example .env
           php artisan key:generate
 
-      # A security tool that will not look at itself is a bad sign. Scans
-      # app/ rather than the whole tree, because the test fixtures contain
-      # deliberately vulnerable code used to prove the rules fire.
+      # A security tool that will not look at itself is a bad sign.
+      # Scan app/ rather than the whole tree because the test fixtures
+      # contain deliberately vulnerable code used to prove the rules fire.
       - name: Scan application source
         run: |
           php artisan sast:inspect app \
@@ -112,8 +117,8 @@ jobs:
             --fail-on=CRITICAL
 
       - name: Upload SARIF to code scanning
-        # Runs even when the gate above fails, so findings are visible rather
-        # than only a red cross.
+        # Runs even when the gate above fails, so findings are visible
+        # rather than only showing a red cross.
         if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@df559355d593797519d70b90fc8edd5db049e7a2 # v3

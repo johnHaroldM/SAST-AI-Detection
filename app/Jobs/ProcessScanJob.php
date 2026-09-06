@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Finding;
 use App\Models\Scan;
+use App\Services\AI\FindingContextBuilder;
 use App\Services\FeatureVectorBuilder;
 use App\Services\RubixTriageService;
 use App\Services\ScannerReportParsers\ReportParserFactory;
@@ -40,6 +41,7 @@ class ProcessScanJob implements ShouldQueue
         FeatureVectorBuilder $vectorBuilder,
         RubixTriageService $triageService,
         SourceWorkspaceFactory $workspaces,
+        FindingContextBuilder $aiContextBuilder,
     ): void {
         $this->scan->update(['status' => 'parsing']);
 
@@ -90,6 +92,34 @@ class ProcessScanJob implements ShouldQueue
             // cold start (no model trained yet) this scores nothing and the
             // findings queue up unscored for human labeling instead.
             $scoredCount = $triageService->predictBatch($findings);
+
+            // Persist the exact AI input context now, while the source
+            // workspace still exists — it gets released in `finally`
+            // below, and AnalyzeFindingsWithAninoJob runs later on a
+            // separate queue with no access to this checkout.
+            foreach ($findings as $finding) {
+                $finding->refresh();
+
+                $snapshot = $aiContextBuilder->build(
+                    $finding,
+                    $workspace->path()
+                );
+
+                $finding->aiContext()->updateOrCreate(
+                    [],
+                    [
+                        'source_commit' => $this->scan->commit_sha ?? null,
+                        'context_hash' => $snapshot['hash'],
+                        'metadata' => $snapshot['metadata'],
+                        'context' => $snapshot['context'],
+                    ]
+                );
+            }
+
+            if (config('services.ollama.enabled') && $findings->isNotEmpty()) {
+                AnalyzeFindingsWithAninoJob::dispatch($this->scan->id)
+                    ->onQueue(config('services.ollama.queue', 'ai-analysis'));
+            }
 
             $suppressedCount = $findings
                 ->filter(fn (Finding $f) => $f->predicted_label === 'false_positive' && $f->tp_probability <= 0.15)

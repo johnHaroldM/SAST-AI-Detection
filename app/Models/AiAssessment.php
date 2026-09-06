@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\AI\AiEvaluationOutcome;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -13,6 +15,7 @@ class AiAssessment extends Model
         'model',
         'model_version',
         'classification',    // confirmed_tp | likely_tp | needs_validation | likely_fp | confirmed_fp
+        'evaluation_outcome', // Confusion-matrix outcome relative to Rubix's prediction
         'confidence',
         'attacker_controlled',
         'sink_reachable',
@@ -51,5 +54,22 @@ class AiAssessment extends Model
     public function finding(): BelongsTo
     {
         return $this->belongsTo(Finding::class);
+    }
+
+    /**
+     * Historical rows are classified on read; new rows persist the outcome.
+     *
+     * @return Attribute<string, never>
+     */
+    protected function evaluationOutcome(): Attribute
+    {
+        return Attribute::make(
+            get: fn (mixed $value): string => is_string($value) && $value !== ''
+                ? $value
+                : AiEvaluationOutcome::classify(
+                    $this->finding?->predicted_label,
+                    $this->classification,
+                ),
+        );
     }
 }

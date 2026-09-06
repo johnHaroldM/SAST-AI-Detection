@@ -12,7 +12,7 @@ use App\Models\Finding;
  */
 class DepensaReviewer
 {
-    private const PROMPT_VERSION = 'depensa-v1';
+    public const PROMPT_VERSION = 'depensa-v2';
 
     public function __construct(
         private readonly OllamaClient $ollama
@@ -76,6 +76,8 @@ Rules:
    evidence.
 7. "confirmed_tp" requires strong supporting evidence.
 8. Return only JSON matching the supplied schema.
+9. Be concise: use at most two short items per list and keep
+   the reasoning summary to one or two sentences.
 PROMPT
             ],
 

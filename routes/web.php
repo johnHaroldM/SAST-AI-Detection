@@ -18,6 +18,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/scans/upload', [ScanDashboardController::class, 'create'])->name('scans.create');
     Route::post('/scans', [ScanDashboardController::class, 'store'])->name('scans.store');
     Route::get('/scans/{scan}', [ScanDashboardController::class, 'show'])->name('scans.show');
+    Route::post('/scans/{scan}/anino-analysis', [ScanDashboardController::class, 'analyzeWithAnino'])->name('scans.anino.analyze');
+    Route::post('/scans/{scan}/anino-training', [ScanDashboardController::class, 'trainFromAnino'])->name('scans.anino.train');
 
     Route::get('/projects', [ProjectDashboardController::class, 'index'])->name('projects.index');
     Route::post('/projects', [ProjectDashboardController::class, 'store'])->name('projects.store');

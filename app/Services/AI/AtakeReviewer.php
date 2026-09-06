@@ -13,7 +13,7 @@ use App\Models\Finding;
  */
 class AtakeReviewer
 {
-    private const PROMPT_VERSION = 'atake-v1';
+    public const PROMPT_VERSION = 'atake-v2';
 
     public function __construct(
         private readonly OllamaClient $ollama
@@ -70,6 +70,8 @@ Rules:
    "likely_tp" or "needs_validation".
 7. Do not provide destructive operational instructions.
 8. Return only JSON matching the supplied schema.
+9. Be concise: use at most two short items per list and keep
+   the reasoning summary to one or two sentences.
 PROMPT
             ],
 

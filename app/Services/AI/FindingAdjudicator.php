@@ -25,14 +25,14 @@ class FindingAdjudicator
 {
     public function update(Finding $finding): void
     {
-        $assessments = $finding
-            ->aiAssessments()
-            ->whereIn('reviewer', ['atake', 'depensa'])
-            ->get()
-            ->keyBy('reviewer');
-
-        $atake = $assessments->get('atake');
-        $depensa = $assessments->get('depensa');
+        $atake = $finding->aiAssessments()
+            ->where('reviewer', 'atake')
+            ->latest('completed_at')
+            ->first();
+        $depensa = $finding->aiAssessments()
+            ->where('reviewer', 'depensa')
+            ->latest('completed_at')
+            ->first();
 
         if (! $atake || ! $depensa) {
             return;
@@ -51,6 +51,11 @@ class FindingAdjudicator
                 'model' => 'deterministic-rules-v1',
 
                 'classification' => $classification,
+
+                'evaluation_outcome' => AiEvaluationOutcome::classify(
+                    $finding->predicted_label,
+                    $classification,
+                ),
 
                 'confidence' => $confidence,
 

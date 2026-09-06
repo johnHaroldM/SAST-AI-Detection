@@ -33,6 +33,10 @@ return [
         'model_path' => 'sast_triage_model.rbx',
     ],
 
+    'ai_training' => [
+        'confidence_threshold' => (float) env('SAST_AI_TRAINING_CONFIDENCE_THRESHOLD', 0.85),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Random Forest Hyperparameters

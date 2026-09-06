@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Scan extends Model
 {
@@ -38,5 +39,21 @@ class Scan extends Model
     public function findings(): HasMany
     {
         return $this->hasMany(Finding::class);
+    }
+
+    /**
+     * @return HasOne<AninoAnalysisRun, $this>
+     */
+    public function latestAninoRun(): HasOne
+    {
+        return $this->hasOne(AninoAnalysisRun::class)->latestOfMany();
+    }
+
+    /**
+     * @return HasMany<AninoAnalysisRun, $this>
+     */
+    public function aninoAnalysisRuns(): HasMany
+    {
+        return $this->hasMany(AninoAnalysisRun::class);
     }
 }

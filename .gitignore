@@ -28,3 +28,13 @@ Homestead.json
 .env.production
 .phpactor.json
 auth.json
+
+
+/.vite/
+/bootstrap/cache/*.php
+/storage/framework/
+/storage/logs/
+/storage/app/private/
+/resources/js/actions/
+/resources/js/routes/
+/resources/js/wayfinder/

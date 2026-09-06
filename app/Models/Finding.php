@@ -6,6 +6,7 @@ use Database\Factories\FindingFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Finding extends Model
@@ -64,6 +65,30 @@ class Finding extends Model
     public function feedback(): HasOne
     {
         return $this->hasOne(TriageFeedback::class);
+    }
+
+    /**
+     * The persisted evidence snapshot sent to ATAKE/DEPENSA. Built and
+     * saved while the source workspace is still available, since
+     * ProcessScanJob releases it in a finally block before the queued
+     * AI job can run.
+     *
+     * @return HasOne<FindingAiContext, $this>
+     */
+    public function aiContext(): HasOne
+    {
+        return $this->hasOne(FindingAiContext::class);
+    }
+
+    /**
+     * ATAKE/DEPENSA/adjudicator results. Advisory only — never a source
+     * for final_label or for Rubix retraining ground truth.
+     *
+     * @return HasMany<AiAssessment, $this>
+     */
+    public function aiAssessments(): HasMany
+    {
+        return $this->hasMany(AiAssessment::class);
     }
 
     public function isHighConfidenceTruePositive(float $threshold = 0.80): bool

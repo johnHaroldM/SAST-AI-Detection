@@ -4,6 +4,7 @@ use App\Jobs\ProcessScanJob;
 use App\Models\Finding;
 use App\Models\Project;
 use App\Models\Scan;
+use App\Services\AI\FindingContextBuilder;
 use App\Services\FeatureVectorBuilder;
 use App\Services\RubixTriageService;
 use App\Services\ScannerReportParsers\ReportParserFactory;
@@ -11,6 +12,7 @@ use App\Services\Workspaces\GitCloneWorkspace;
 use App\Services\Workspaces\LocalPathWorkspace;
 use App\Services\Workspaces\NullWorkspace;
 use App\Services\Workspaces\SourceWorkspaceFactory;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -31,10 +33,9 @@ beforeEach(function () {
 
 afterEach(function () {
     if (isset($this->root) && is_dir($this->root)) {
-        exec(sprintf('rm -rf %s', escapeshellarg($this->root)));
+        File::deleteDirectory($this->root);
     }
 });
-
 /** Writes a small PHP file with known AST characteristics. */
 function writeSourceFile(string $dir, string $relative, string $contents): string
 {
@@ -331,8 +332,8 @@ PHP);
         app(FeatureVectorBuilder::class),
         app(RubixTriageService::class),
         app(SourceWorkspaceFactory::class),
+        app(FindingContextBuilder::class),
     );
-
     $vector = Finding::sole()->feature_vector;
 
     expect($vector['cyclomatic_complexity'])->toBeGreaterThan(1)
@@ -370,6 +371,7 @@ it('still ingests when the workspace is unavailable, using default features', fu
         app(FeatureVectorBuilder::class),
         app(RubixTriageService::class),
         app(SourceWorkspaceFactory::class),
+        app(FindingContextBuilder::class),
     );
 
     $vector = Finding::sole()->feature_vector;

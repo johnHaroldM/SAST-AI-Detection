@@ -5,6 +5,7 @@ use App\Models\Project;
 use App\Models\Scan;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -249,7 +250,7 @@ it('does not upload anything on a dry run', function () {
     expect(Scan::count())->toBe(0)
         ->and(Finding::count())->toBe(0);
 
-    exec(sprintf('rm -rf %s', escapeshellarg($root)));
+    File::deleteDirectory($root);
 });
 
 it('refuses to upload without an endpoint and token', function () {
@@ -258,5 +259,5 @@ it('refuses to upload without an endpoint and token', function () {
 
     $this->artisan('sast:push', ['path' => $root, '--yes' => true])->assertExitCode(1);
 
-    exec(sprintf('rm -rf %s', escapeshellarg($root)));
+    File::deleteDirectory($root);
 });

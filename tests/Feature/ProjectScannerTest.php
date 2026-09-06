@@ -3,6 +3,7 @@
 use App\Services\Scanner\ProjectScanner;
 use App\Services\Scanner\SarifReportWriter;
 use App\Services\ScannerReportParsers\SarifReportParser;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 /**
@@ -18,7 +19,7 @@ beforeEach(function () {
 
 afterEach(function () {
     if (isset($this->root) && is_dir($this->root)) {
-        exec(sprintf('rm -rf %s', escapeshellarg($this->root)));
+        File::deleteDirectory($this->root);
     }
 });
 

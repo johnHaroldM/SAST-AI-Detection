@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\GitBlameAuthorResolver;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 beforeEach(function () {
@@ -11,7 +12,7 @@ beforeEach(function () {
 
 afterEach(function () {
     if (isset($this->root) && is_dir($this->root)) {
-        exec(sprintf('rm -rf %s', escapeshellarg($this->root)));
+        File::deleteDirectory($this->root);
     }
 });
 

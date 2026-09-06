@@ -5,6 +5,7 @@ use App\Models\Project;
 use App\Models\Scan;
 use App\Models\User;
 use App\Services\Scanner\ScanTargetInspector;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 beforeEach(function () {
@@ -23,7 +24,7 @@ beforeEach(function () {
 
 afterEach(function () {
     if (isset($this->root) && is_dir($this->root)) {
-        exec(sprintf('rm -rf %s', escapeshellarg($this->root)));
+        File::deleteDirectory($this->root);
     }
 });
 

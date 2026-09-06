@@ -10,6 +10,9 @@ namespace App\Services\AI;
  */
 final class AiAssessmentSchema
 {
+    /**
+     * @return array<string, mixed>
+     */
     public static function make(): array
     {
         return [

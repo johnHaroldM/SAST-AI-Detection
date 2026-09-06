@@ -18,7 +18,7 @@ use Illuminate\Support\Str;
 class FindingContextBuilder
 {
     public function __construct(
-        private readonly SecretRedactor $redactor = new SecretRedactor(),
+        private readonly SecretRedactor $redactor = new SecretRedactor,
     ) {}
 
     /**
@@ -57,11 +57,9 @@ class FindingContextBuilder
             'static_analysis' => [
                 'feature_vector' => $finding->feature_vector,
 
-                'rubix_tp_probability' =>
-                    $finding->tp_probability,
+                'rubix_tp_probability' => $finding->tp_probability,
 
-                'rubix_predicted_label' =>
-                    $finding->predicted_label,
+                'rubix_predicted_label' => $finding->predicted_label,
             ],
 
             'source_context' => $sourceContext,

@@ -84,6 +84,16 @@ class AnalyzeFindingsWithAninoJob implements ShouldQueue
             );
     }
 
+    /**
+     * @param array{
+     *     reviewer: string,
+     *     model: string,
+     *     prompt_version: string,
+     *     result: array<string, mixed>,
+     *     usage: array<string, mixed>,
+     *     raw: array<string, mixed>
+     * } $review
+     */
     private function storeAssessment(Finding $finding, array $review): void
     {
         $result = $review['result'];

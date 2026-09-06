@@ -1,0 +1,684 @@
+{
+    "version": "2.1.0",
+    "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+    "runs": [
+        {
+            "tool": {
+                "driver": {
+                    "name": "sast-ai-detection built-in scanner",
+                    "informationUri": "https://github.com/",
+                    "rules": [
+                        {
+                            "id": "php.laravel.security.sql-injection",
+                            "shortDescription": {
+                                "text": "SQL statement assembled from dynamic input rather than bound parameters"
+                            },
+                            "defaultConfiguration": {
+                                "level": "error"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-89"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.security.command-injection",
+                            "shortDescription": {
+                                "text": "Shell command built from dynamic input"
+                            },
+                            "defaultConfiguration": {
+                                "level": "error"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-78"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.security.unserialize-user-input",
+                            "shortDescription": {
+                                "text": "unserialize() applied to untrusted data allows object injection"
+                            },
+                            "defaultConfiguration": {
+                                "level": "error"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-502"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.security.path-traversal",
+                            "shortDescription": {
+                                "text": "Filesystem path or include target derived from dynamic input"
+                            },
+                            "defaultConfiguration": {
+                                "level": "error"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-22"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.laravel.security.xss-unescaped-output",
+                            "shortDescription": {
+                                "text": "Dynamic value rendered without HTML escaping"
+                            },
+                            "defaultConfiguration": {
+                                "level": "warning"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-79"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.laravel.security.mass-assignment",
+                            "shortDescription": {
+                                "text": "Model populated directly from request input without an explicit field list"
+                            },
+                            "defaultConfiguration": {
+                                "level": "warning"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-915"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.security.weak-hashing",
+                            "shortDescription": {
+                                "text": "Cryptographically broken hash function"
+                            },
+                            "defaultConfiguration": {
+                                "level": "note"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-327"
+                                ]
+                            }
+                        },
+                        {
+                            "id": "php.security.hardcoded-secret",
+                            "shortDescription": {
+                                "text": "Credential appears to be hardcoded in source"
+                            },
+                            "defaultConfiguration": {
+                                "level": "error"
+                            },
+                            "properties": {
+                                "tags": [
+                                    "security",
+                                    "CWE-798"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "results": [
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Console/Commands/InspectPathCommand.php"
+                                },
+                                "region": {
+                                    "startLine": 102,
+                                    "snippet": {
+                                        "text": "file_put_contents($destination, $report);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.weak-hashing",
+                    "level": "note",
+                    "message": {
+                        "text": "sha1() is cryptographically broken"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Console/Commands/PushScanCommand.php"
+                                },
+                                "region": {
+                                    "startLine": 207,
+                                    "snippet": {
+                                        "text": ": substr(sha1($path), 0, 40);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "LOW",
+                        "cweId": 327
+                    }
+                },
+                {
+                    "ruleId": "php.security.weak-hashing",
+                    "level": "note",
+                    "message": {
+                        "text": "sha1() is cryptographically broken"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Console/Commands/ScanProjectCommand.php"
+                                },
+                                "region": {
+                                    "startLine": 154,
+                                    "snippet": {
+                                        "text": "return substr(sha1($root), 0, 40);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "LOW",
+                        "cweId": 327
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to 'vcs_access_token'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Models/Project.php"
+                                },
+                                "region": {
+                                    "startLine": 31,
+                                    "snippet": {
+                                        "text": "'vcs_access_token' => 'encrypted',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to 'ingest_token_created_at'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Models/Project.php"
+                                },
+                                "region": {
+                                    "startLine": 32,
+                                    "snippet": {
+                                        "text": "'ingest_token_created_at' => 'datetime',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to 'ingest_token_last_used_at'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Models/Project.php"
+                                },
+                                "region": {
+                                    "startLine": 33,
+                                    "snippet": {
+                                        "text": "'ingest_token_last_used_at' => 'datetime',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to 'ingest_token_expires_at'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Models/Project.php"
+                                },
+                                "region": {
+                                    "startLine": 34,
+                                    "snippet": {
+                                        "text": "'ingest_token_expires_at' => 'datetime',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/AI/FindingContextBuilder.php"
+                                },
+                                "region": {
+                                    "startLine": 129,
+                                    "snippet": {
+                                        "text": "$lines = @file($file);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to '/(?i)aws_secret_access_key\\s*[:=]\\s*['\"]?[A-Za-z0-9\\/+=]{30,}['\"]?/'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/AI/SecretRedactor.php"
+                                },
+                                "region": {
+                                    "startLine": 32,
+                                    "snippet": {
+                                        "text": "'/(?i)aws_secret_access_key\\s*[:=]\\s*[\\'\"]?[A-Za-z0-9\\/+=]{30,}[\\'\"]?/' => 'AWS_SECRET_ACCESS_KEY',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to '/(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|client[_-]?secret)\\s*[:=]\\s*['\"][A-Za-z0-9_\\-\\/+=]{12,}['\"]/'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/AI/SecretRedactor.php"
+                                },
+                                "region": {
+                                    "startLine": 48,
+                                    "snippet": {
+                                        "text": "'/(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|client[_-]?secret)\\s*[:=]\\s*[\\'\"][A-Za-z0-9_\\-\\/+=]{12,}[\\'\"]/' => 'API_KEY_OR_TOKEN',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.hardcoded-secret",
+                    "level": "error",
+                    "message": {
+                        "text": "Hardcoded literal assigned to '/(?i)authorization\\s*:\\s*(Bearer|Basic)\\s+\\S+/'"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/AI/SecretRedactor.php"
+                                },
+                                "region": {
+                                    "startLine": 54,
+                                    "snippet": {
+                                        "text": "'/(?i)authorization\\s*:\\s*(Bearer|Basic)\\s+\\S+/' => 'AUTHORIZATION_HEADER',"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 798
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/AstFeatureExtractor.php"
+                                },
+                                "region": {
+                                    "startLine": 68,
+                                    "snippet": {
+                                        "text": "$code = file_get_contents($absoluteFilePath);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/RubixTriageService.php"
+                                },
+                                "region": {
+                                    "startLine": 268,
+                                    "snippet": {
+                                        "text": "mkdir(dirname($path), 0755, true);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.weak-hashing",
+                    "level": "note",
+                    "message": {
+                        "text": "sha1() is cryptographically broken"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Scanner/OnDemandScanner.php"
+                                },
+                                "region": {
+                                    "startLine": 93,
+                                    "snippet": {
+                                        "text": ": substr(sha1($root), 0, 40);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "LOW",
+                        "cweId": 327
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Scanner/ProjectScanner.php"
+                                },
+                                "region": {
+                                    "startLine": 103,
+                                    "snippet": {
+                                        "text": "$code = @file_get_contents($absolutePath);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Scanner/ScanTargetInspector.php"
+                                },
+                                "region": {
+                                    "startLine": 44,
+                                    "snippet": {
+                                        "text": "foreach ((scandir($root) ?: []) as $entry) {"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Triage/FindingReport.php"
+                                },
+                                "region": {
+                                    "startLine": 136,
+                                    "snippet": {
+                                        "text": "$lines = file($absolute, FILE_IGNORE_NEW_LINES);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Workspaces/GitCloneWorkspace.php"
+                                },
+                                "region": {
+                                    "startLine": 202,
+                                    "snippet": {
+                                        "text": "if (! is_dir($this->scratchPath) && ! mkdir($this->scratchPath, 0755, true) && ! is_dir($this->scratchPath)) {"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Workspaces/GitCloneWorkspace.php"
+                                },
+                                "region": {
+                                    "startLine": 317,
+                                    "snippet": {
+                                        "text": "@rmdir($item->getPathname());"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Workspaces/GitCloneWorkspace.php"
+                                },
+                                "region": {
+                                    "startLine": 325,
+                                    "snippet": {
+                                        "text": "@unlink($item->getPathname());"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                },
+                {
+                    "ruleId": "php.security.path-traversal",
+                    "level": "error",
+                    "message": {
+                        "text": "File operation receives a dynamic path"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "Services/Workspaces/GitCloneWorkspace.php"
+                                },
+                                "region": {
+                                    "startLine": 328,
+                                    "snippet": {
+                                        "text": "@rmdir($directory);"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "severity": "HIGH",
+                        "cweId": 22
+                    }
+                }
+            ]
+        }
+    ]
+}

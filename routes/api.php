@@ -23,6 +23,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/scans', [ScanController::class, 'store'])->name('api.scans.store');
     Route::get('/scans/{scan}', [ScanController::class, 'show'])->name('api.scans.show');
     Route::get('/scans/{scan}/findings', [ScanController::class, 'findings'])->name('api.scans.findings');
+    Route::get('/scans/{scan}/anino-status', [ScanController::class, 'aninoStatus'])->name('api.scans.anino-status');
 
     // Human-in-the-loop triage (feeds the retraining loop)
     Route::post('/findings/{finding}/triage', [TriageController::class, 'store'])->name('api.findings.triage');

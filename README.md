@@ -111,6 +111,44 @@ Labels come from triage: every decision in the UI (or `POST /api/findings/{id}/t
 
 Everything tunable lives in [config/sast.php](config/sast.php): training minimums and split ratio, RandomForest hyperparameters, rule noise thresholds, the PR-comment confidence gate (off by default), and the source workspace root.
 
+## ATAKE / DEPENSA AI review
+
+ATAKE and DEPENSA are advisory Ollama reviewers that run after scan ingestion saves the compact AI context for each finding. ATAKE checks exploitability from an offensive perspective; DEPENSA checks for false-positive evidence from a defensive perspective; the adjudicator combines their outputs.
+
+```bash
+ollama pull chrisdiochavez/ANINOGPT-PILIPINAS-ATAKE:latestv3
+ollama pull chrisdiochavez/ANINOGPT-PILIPINAS-DEPENSA:latestv5-lightweight
+```
+
+Set these values in `.env`, then restart Laravel and the queue worker:
+
+```bash
+ANINO_AI_ENABLED=true
+OLLAMA_URL=http://127.0.0.1:11434
+ANINO_AI_MAX_CONTEXT_CHARS=4500
+ANINO_AI_CONTEXT_LINES=20
+ANINO_AI_MAX_FINDINGS_PER_RUN=10
+ANINO_AI_NUM_CTX=4096
+ANINO_AI_NUM_PREDICT=320
+ANINO_AI_KEEP_ALIVE=30m
+ANINO_AI_RETRIES=1
+ANINO_ATAKE_MODEL=chrisdiochavez/ANINOGPT-PILIPINAS-ATAKE:latestv3
+ANINO_DEPENSA_MODEL=chrisdiochavez/ANINOGPT-PILIPINAS-DEPENSA:latestv5-lightweight
+SAST_AI_TRAINING_CONFIDENCE_THRESHOLD=0.85
+```
+
+Run the queue that processes AI reviews:
+
+```bash
+php artisan queue:work --queue=ai-analysis,default
+```
+
+New scans queue ATAKE/DEPENSA automatically when `ANINO_AI_ENABLED=true`. For an existing completed scan, open `/scans/{scan}` and use **Run AI review**. Each run reviews the highest-risk unreviewed slice first, capped by `ANINO_AI_MAX_FINDINGS_PER_RUN`. Every finding is a separate resumable queue job, and a completed ATAKE or DEPENSA result is reused after an interruption. Expand a finding to see the ATAKE, DEPENSA, and adjudicator cards once the queue finishes.
+
+The supplied ATAKE and lightweight DEPENSA models are both roughly 8B Q4 models. CPU-only inference can still take one or two minutes per reviewer. The defaults above keep the evidence centered on the flagged line, cap response generation, and keep both models loaded. Lower `ANINO_AI_NUM_PREDICT` or `ANINO_AI_CONTEXT_LINES` carefully if more speed is needed; a dedicated GPU remains the largest performance improvement.
+
+Use **Teach Rubix** on the scan page to promote high-confidence adjudicator TP/FP results into `TriageFeedback` labels and queue the built-in Rubix model retraining job. `needs_validation`, low-confidence rows, already triaged findings, and findings without feature vectors are ignored.
+
 ### Notes for whoever picks this up next
 
 - Rubix's probability method is `proba()`, not `predictProbabilities()`.

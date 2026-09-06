@@ -2,7 +2,9 @@
 
 namespace App\Services\Triage;
 
+use App\Models\AiAssessment;
 use App\Models\Finding;
+use App\Services\AI\AiEvaluationOutcome;
 use App\Services\Workspaces\SourceWorkspaceFactory;
 
 /**
@@ -43,6 +45,7 @@ class FindingReport
                 'final_label' => $finding->final_label,
                 'tp_probability' => $finding->tp_probability,
                 'predicted_label' => $finding->predicted_label,
+                'scan_id' => $finding->scan_id,
                 'project' => $finding->scan?->project?->name,
                 'branch' => $finding->scan?->branch,
             ],
@@ -75,7 +78,93 @@ class FindingReport
 
             'location' => $this->location($finding),
             'code' => $this->codeSnapshot($finding),
+            'aiReview' => $this->aiReview($finding),
         ];
+    }
+
+    /**
+     * @return array{
+     *     rubix_prediction:string|null,
+     *     rubix_probability:float|null,
+     *     reviewers:list<array<string, mixed>>
+     * }
+     */
+    private function aiReview(Finding $finding): array
+    {
+        $assessments = $finding->aiAssessments()
+            ->whereIn('reviewer', ['atake', 'depensa'])
+            ->orderByDesc('completed_at')
+            ->orderByDesc('id')
+            ->get();
+        $reviewers = [];
+
+        foreach (['atake', 'depensa'] as $reviewer) {
+            $assessment = $assessments->first(
+                fn (AiAssessment $candidate) => $candidate->reviewer === $reviewer
+            );
+
+            if ($assessment === null) {
+                $reviewers[] = [
+                    'reviewer' => $reviewer,
+                    'available' => false,
+                    'model' => (string) config("services.ollama.models.{$reviewer}"),
+                ];
+
+                continue;
+            }
+
+            $outcome = AiEvaluationOutcome::classify(
+                $finding->predicted_label,
+                $assessment->classification,
+            );
+
+            $reviewers[] = [
+                'reviewer' => $reviewer,
+                'available' => true,
+                'model' => $assessment->model,
+                'classification' => $assessment->classification,
+                'evaluation_outcome' => $outcome,
+                'outcome_reason' => $this->outcomeReason(
+                    $reviewer,
+                    $finding->predicted_label,
+                    $outcome,
+                ),
+                'confidence' => $assessment->confidence,
+                'attacker_controlled' => $assessment->attacker_controlled,
+                'sink_reachable' => $assessment->sink_reachable,
+                'mitigation_detected' => $assessment->mitigation_detected,
+                'reasoning_summary' => $assessment->reasoning_summary,
+                'preconditions' => array_values($assessment->preconditions ?? []),
+                'supporting_evidence' => array_values($assessment->supporting_evidence ?? []),
+                'contradicting_evidence' => array_values($assessment->contradicting_evidence ?? []),
+                'missing_evidence' => array_values($assessment->missing_evidence ?? []),
+                'remediation' => array_values($assessment->remediation ?? []),
+                'completed_at' => $assessment->completed_at?->toDateTimeString(),
+            ];
+        }
+
+        return [
+            'rubix_prediction' => $finding->predicted_label,
+            'rubix_probability' => $finding->tp_probability,
+            'reviewers' => $reviewers,
+        ];
+    }
+
+    private function outcomeReason(string $reviewer, ?string $prediction, string $outcome): string
+    {
+        $name = strtoupper($reviewer);
+
+        if ($prediction === null) {
+            return "Rubix has no prediction yet, so {$name}'s verdict cannot be scored against it.";
+        }
+
+        return match ($outcome) {
+            'true_positive' => "Rubix predicted a vulnerability, and {$name} found evidence that supports it.",
+            'false_positive' => "Rubix predicted a vulnerability, but {$name} judged it to be a false alarm.",
+            'true_negative' => "Rubix predicted a false alarm, and {$name} agreed that it is not a supported vulnerability.",
+            'false_negative' => "Rubix predicted a false alarm, but {$name} found evidence of a vulnerability.",
+            default => "{$name} needs more evidence before it can confirm or reject Rubix's prediction.",
+        };
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Services\AI;
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use JsonException;
 use RuntimeException;
 
 /**
@@ -40,7 +41,7 @@ class OllamaClient
                     (int) config('services.ollama.timeout', 180)
                 )
                 ->retry(
-                    (int) config('services.ollama.retries', 2),
+                    max(1, (int) config('services.ollama.retries', 1)),
                     500,
                     throw: false
                 )
@@ -53,8 +54,12 @@ class OllamaClient
 
                     'format' => $schema,
 
+                    'keep_alive' => (string) config('services.ollama.keep_alive', '30m'),
+
                     'options' => [
                         'temperature' => 0,
+                        'num_ctx' => max(2048, (int) config('services.ollama.num_ctx', 4096)),
+                        'num_predict' => max(128, (int) config('services.ollama.num_predict', 320)),
                     ],
                 ]);
         } catch (ConnectionException $e) {
@@ -80,11 +85,7 @@ class OllamaClient
             );
         }
 
-        $decoded = json_decode(
-            $content,
-            true,
-            flags: JSON_THROW_ON_ERROR
-        );
+        $decoded = $this->decodeStructuredContent($content);
 
         return [
             'content' => $decoded,
@@ -99,9 +100,103 @@ class OllamaClient
                 'total_duration' => $response->json(
                     'total_duration'
                 ),
+                'load_duration' => $response->json(
+                    'load_duration'
+                ),
+                'prompt_eval_duration' => $response->json(
+                    'prompt_eval_duration'
+                ),
+                'eval_duration' => $response->json(
+                    'eval_duration'
+                ),
             ],
 
             'raw' => $response->json(),
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeStructuredContent(string $content): array
+    {
+        try {
+            $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+            if ($error->getCode() !== JSON_ERROR_CTRL_CHAR) {
+                throw new RuntimeException(
+                    'Ollama returned invalid structured JSON: '.$error->getMessage(),
+                    previous: $error,
+                );
+            }
+
+            try {
+                $decoded = json_decode(
+                    $this->escapeControlCharactersInStrings($content),
+                    true,
+                    flags: JSON_THROW_ON_ERROR,
+                );
+            } catch (JsonException $retryError) {
+                throw new RuntimeException(
+                    'Ollama returned invalid structured JSON after control-character repair: '.$retryError->getMessage(),
+                    previous: $retryError,
+                );
+            }
+        }
+
+        if (! is_array($decoded)) {
+            throw new RuntimeException('Ollama returned structured JSON with an invalid root value.');
+        }
+
+        return $decoded;
+    }
+
+    private function escapeControlCharactersInStrings(string $json): string
+    {
+        $result = '';
+        $inString = false;
+        $escaped = false;
+
+        for ($index = 0, $length = strlen($json); $index < $length; $index++) {
+            $character = $json[$index];
+
+            if (! $inString) {
+                $result .= $character;
+
+                if ($character === '"') {
+                    $inString = true;
+                }
+
+                continue;
+            }
+
+            if ($escaped) {
+                $result .= $character;
+                $escaped = false;
+
+                continue;
+            }
+
+            if ($character === '\\') {
+                $result .= $character;
+                $escaped = true;
+
+                continue;
+            }
+
+            if ($character === '"') {
+                $result .= $character;
+                $inString = false;
+
+                continue;
+            }
+
+            $codePoint = ord($character);
+            $result .= $codePoint < 0x20
+                ? sprintf('\\u%04X', $codePoint)
+                : $character;
+        }
+
+        return $result;
     }
 }

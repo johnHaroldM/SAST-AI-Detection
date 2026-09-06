@@ -33,6 +33,7 @@ final class AiAssessmentSchema
 
                 'confidence' => [
                     'type' => 'number',
+                    'description' => 'Decimal confidence from 0 to 1. Use 0.50, not 50.',
                     'minimum' => 0,
                     'maximum' => 1,
                 ],
@@ -51,41 +52,52 @@ final class AiAssessmentSchema
 
                 'preconditions' => [
                     'type' => 'array',
+                    'maxItems' => 2,
                     'items' => [
                         'type' => 'string',
+                        'maxLength' => 180,
                     ],
                 ],
 
                 'supporting_evidence' => [
                     'type' => 'array',
+                    'maxItems' => 2,
                     'items' => [
                         'type' => 'string',
+                        'maxLength' => 180,
                     ],
                 ],
 
                 'contradicting_evidence' => [
                     'type' => 'array',
+                    'maxItems' => 2,
                     'items' => [
                         'type' => 'string',
+                        'maxLength' => 180,
                     ],
                 ],
 
                 'missing_evidence' => [
                     'type' => 'array',
+                    'maxItems' => 2,
                     'items' => [
                         'type' => 'string',
+                        'maxLength' => 180,
                     ],
                 ],
 
                 'remediation' => [
                     'type' => 'array',
+                    'maxItems' => 2,
                     'items' => [
                         'type' => 'string',
+                        'maxLength' => 180,
                     ],
                 ],
 
                 'reasoning_summary' => [
                     'type' => 'string',
+                    'maxLength' => 240,
                 ],
             ],
 

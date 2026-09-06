@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Models\AninoAnalysisRun;
 use App\Models\Finding;
 use App\Models\Scan;
+use App\Services\AI\AninoCandidateSelector;
 use App\Services\AI\FindingContextBuilder;
 use App\Services\FeatureVectorBuilder;
 use App\Services\RubixTriageService;
@@ -117,8 +119,24 @@ class ProcessScanJob implements ShouldQueue
             }
 
             if (config('services.ollama.enabled') && $findings->isNotEmpty()) {
-                AnalyzeFindingsWithAninoJob::dispatch($this->scan->id)
-                    ->onQueue(config('services.ollama.queue', 'ai-analysis'));
+                $candidateIds = app(AninoCandidateSelector::class)
+                    ->forScan($this->scan)
+                    ->values()
+                    ->all();
+
+                if ($candidateIds !== []) {
+                    $run = AninoAnalysisRun::create([
+                        'scan_id' => $this->scan->id,
+                        'status' => 'queued',
+                        'phase' => 'queued',
+                        'candidate_finding_ids' => $candidateIds,
+                        'total_findings' => count($candidateIds),
+                        'heartbeat_at' => now(),
+                    ]);
+
+                    AnalyzeFindingsWithAninoJob::dispatch($this->scan->id, $run->id)
+                        ->onQueue(config('services.ollama.queue', 'ai-analysis'));
+                }
             }
 
             $suppressedCount = $findings

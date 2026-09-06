@@ -11,12 +11,14 @@ use Illuminate\Support\Str;
  * before it's assembled, since this payload gets persisted to
  * finding_ai_contexts as well as sent to Ollama.
  *
- * The ±50-line window here is the documented first pass; see project
- * notes for the planned AST-based upgrade (containing function/class,
+ * The configurable centered line window is a compact first pass; see
+ * project notes for the planned AST-based upgrade (containing function/class,
  * source/sink expressions, sanitizer calls, route/middleware context).
  */
 class FindingContextBuilder
 {
+    public const FORMAT_VERSION = 'compact-v2';
+
     public function __construct(
         private readonly SecretRedactor $redactor = new SecretRedactor,
     ) {}
@@ -65,12 +67,7 @@ class FindingContextBuilder
             'source_context' => $sourceContext,
         ];
 
-        $context = json_encode(
-            $payload,
-            JSON_PRETTY_PRINT
-            | JSON_UNESCAPED_SLASHES
-            | JSON_THROW_ON_ERROR
-        );
+        $context = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
         // Prevent giant prompts.
         $context = Str::limit(
@@ -86,6 +83,7 @@ class FindingContextBuilder
                 'finding_id' => $finding->id,
                 'file_path' => $finding->file_path,
                 'line_number' => $finding->line_number,
+                'format_version' => self::FORMAT_VERSION,
             ],
 
             'hash' => hash('sha256', $context),
@@ -137,10 +135,10 @@ class FindingContextBuilder
 
         $line = max(1, (int) $finding->line_number);
 
-        // Start with ±50 lines. Improve later using AST
-        // function boundaries.
-        $start = max(1, $line - 50);
-        $end = min(count($lines), $line + 50);
+        // Keep the flagged line centered until AST function boundaries are available.
+        $radius = max(5, (int) config('services.ollama.context_lines', 20));
+        $start = max(1, $line - $radius);
+        $end = min(count($lines), $line + $radius);
 
         $snippet = [];
 

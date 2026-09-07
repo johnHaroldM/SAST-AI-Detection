@@ -44,8 +44,15 @@ class Rule extends Model
      */
     public function recalculateFpRate(): void
     {
-        $total = $this->findings()->whereNotNull('final_label')->count();
-        $fp = $this->findings()->where('final_label', 'false_positive')->count();
+        $trusted = $this->findings()
+            ->whereNotNull('final_label')
+            ->whereHas('feedback', fn ($query) => $query
+                ->whereIn('source', ['human', 'benchmark', 'import'])
+                ->where('training_eligible', true)
+                ->whereColumn('triage_feedback.corrected_label', 'findings.final_label'));
+
+        $total = (clone $trusted)->count();
+        $fp = (clone $trusted)->where('final_label', 'false_positive')->count();
 
         $this->total_seen = $total;
         $this->total_false_positive = $fp;

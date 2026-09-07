@@ -52,6 +52,8 @@ class AiTrainingPromoter
                     'original_prediction' => $finding->predicted_label,
                     'original_probability' => $finding->tp_probability,
                     'corrected_label' => $label,
+                    'source' => 'ai_pseudo',
+                    'source_ai_assessment_id' => $assessment->id,
                     'notes' => sprintf(
                         'AI training label from ATAKE/DEPENSA adjudicator (%s, %.0f%% confidence).',
                         $assessment->classification,
@@ -104,7 +106,7 @@ class AiTrainingPromoter
     {
         return TriageFeedback::query()
             ->whereIn('finding_id', $scan->findings()->select('id'))
-            ->where('notes', 'like', 'AI training label from ATAKE/DEPENSA adjudicator%')
+            ->where('source', 'ai_pseudo')
             ->count();
     }
 

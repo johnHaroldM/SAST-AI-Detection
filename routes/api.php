@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AiAssessmentFeedbackController;
 use App\Http\Controllers\ModelController;
 use App\Http\Controllers\RuleController;
 use App\Http\Controllers\ScanController;
@@ -29,6 +30,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/findings/{finding}/triage', [TriageController::class, 'store'])->name('api.findings.triage');
     Route::delete('/findings/{finding}/triage', [TriageController::class, 'destroy'])->name('api.findings.untriage');
     Route::post('/findings/bulk-triage', [TriageController::class, 'bulkStore'])->name('api.findings.bulk-triage');
+
+    // Explicit human review of ATAKE / DEPENSA output (does not set ground truth)
+    Route::put('/ai-assessments/{aiAssessment}/feedback', [AiAssessmentFeedbackController::class, 'update'])
+        ->name('api.ai-assessments.feedback.update');
+    Route::delete('/ai-assessments/{aiAssessment}/feedback', [AiAssessmentFeedbackController::class, 'destroy'])
+        ->name('api.ai-assessments.feedback.destroy');
 
     // Model training + status
     Route::get('/model/status', [ModelController::class, 'status'])->name('api.model.status');

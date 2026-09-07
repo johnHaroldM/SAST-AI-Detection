@@ -145,9 +145,13 @@ class ScanController extends Controller
                 ->groupBy('reviewer')
                 ->pluck('total', 'reviewer');
         $totalSteps = max(0, (int) ($run->total_findings ?? 0) * 2);
-        $completedSteps = $candidateIds === []
+        $legacyCompletedSteps = $candidateIds === []
             ? min($totalSteps, ((int) ($run->processed_findings ?? 0) * 2) + $this->phaseStep($run?->phase))
             : min($totalSteps, (int) $runReviewCounts->sum());
+        $completedSteps = min($totalSteps, max(
+            $legacyCompletedSteps,
+            (int) ($run->next_step ?? 0),
+        ));
         $averageSeconds = $this->averageInferenceSeconds($scan);
         $remainingSeconds = $terminal
             ? 0
@@ -169,6 +173,7 @@ class ScanController extends Controller
             'depensa' => (int) ($reviewCounts['depensa'] ?? 0),
             'adjudicated' => (int) ($reviewCounts['adjudicator'] ?? 0),
             'outcomes' => $this->outcomeMatrix($scan),
+            'human_outcomes' => $this->humanOutcomeMatrix($scan),
             'retryable_findings' => $retryableFindings,
             'training_candidates' => $trainingPromoter->eligibleCount($scan),
             'training_promoted' => $trainingPromoter->promotedCount($scan),
@@ -178,6 +183,7 @@ class ScanController extends Controller
                 'status' => $run->status,
                 'phase' => $run->phase,
                 'current_finding_id' => $run->current_finding_id,
+                'next_step' => $run->next_step,
                 'processed_findings' => $run->processed_findings,
                 'reviewed_findings' => $run->reviewed_findings,
                 'failed_findings' => $run->failed_findings,
@@ -252,6 +258,72 @@ class ScanController extends Controller
             $seen[$key] = true;
             $outcome = AiEvaluationOutcome::classify(
                 $assessment->finding?->predicted_label,
+                $assessment->classification,
+            );
+
+            if ($assessment->reviewer === 'atake') {
+                $matrix['atake'][$outcome]++;
+            } elseif ($assessment->reviewer === 'depensa') {
+                $matrix['depensa'][$outcome]++;
+            }
+        }
+
+        return $matrix;
+    }
+
+    /**
+     * Score each reviewer's latest result per finding against human ground truth.
+     * Findings without a human label are kept separate from unresolved AI calls.
+     *
+     * @return array{
+     *     atake: array{true_positive:int,false_positive:int,true_negative:int,false_negative:int,unresolved:int,awaiting_review:int},
+     *     depensa: array{true_positive:int,false_positive:int,true_negative:int,false_negative:int,unresolved:int,awaiting_review:int}
+     * }
+     */
+    private function humanOutcomeMatrix(Scan $scan): array
+    {
+        $matrix = [
+            'atake' => AiEvaluationOutcome::emptyHumanMatrix(),
+            'depensa' => AiEvaluationOutcome::emptyHumanMatrix(),
+        ];
+        $seen = [];
+
+        $assessments = AiAssessment::query()
+            ->whereIn('finding_id', $scan->findings()->select('id'))
+            ->whereIn('reviewer', array_keys($matrix))
+            ->with([
+                'finding' => fn ($query) => $query
+                    ->select(['id', 'final_label'])
+                    ->with('feedback:id,finding_id,source'),
+            ])
+            ->orderByDesc('completed_at')
+            ->orderByDesc('id')
+            ->get(['id', 'finding_id', 'reviewer', 'classification', 'completed_at']);
+
+        foreach ($assessments as $assessment) {
+            $key = $assessment->reviewer.':'.$assessment->finding_id;
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $trustedFinalLabel = $assessment->finding?->feedback?->source === 'ai_pseudo'
+                ? null
+                : $assessment->finding?->final_label;
+
+            if ($trustedFinalLabel === null) {
+                if ($assessment->reviewer === 'atake') {
+                    $matrix['atake']['awaiting_review']++;
+                } elseif ($assessment->reviewer === 'depensa') {
+                    $matrix['depensa']['awaiting_review']++;
+                }
+
+                continue;
+            }
+
+            $outcome = AiEvaluationOutcome::classifyAgainstHuman(
+                $trustedFinalLabel,
                 $assessment->classification,
             );
 

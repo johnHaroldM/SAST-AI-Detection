@@ -17,7 +17,16 @@ class ModelState extends Model
     use HasFactory;
 
     protected $fillable = [
-        'trained_at', 'sample_size', 'precision', 'recall', 'f1_score', 'confusion_matrix',
+        'trained_at',
+        'sample_size',
+        'precision',
+        'recall',
+        'f1_score',
+        'confusion_matrix',
+        'deployment_status',
+        'decision_threshold',
+        'model_path',
+        'evaluation_metadata',
     ];
 
     protected $casts = [
@@ -26,5 +35,7 @@ class ModelState extends Model
         'recall' => 'float',
         'f1_score' => 'float',
         'confusion_matrix' => 'array',
+        'decision_threshold' => 'float',
+        'evaluation_metadata' => 'array',
     ];
 }

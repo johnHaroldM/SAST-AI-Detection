@@ -3,9 +3,11 @@
 namespace App\Jobs;
 
 use App\Exceptions\InsufficientTrainingDataException;
+use App\Models\Finding;
 use App\Models\ModelState;
 use App\Services\RubixTriageService;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -19,7 +21,7 @@ use Illuminate\Support\Facades\Log;
  * on a schedule, or automatically once a batch of new labels has
  * accumulated (see TriageController::maybeTriggerRetraining).
  */
-class TrainSastModelJob implements ShouldQueue
+class TrainSastModelJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -27,23 +29,43 @@ class TrainSastModelJob implements ShouldQueue
 
     public int $timeout = 1800;
 
+    /** Prevent duplicate clicks/commands from queueing the same expensive fit. */
+    public int $uniqueFor = 3600;
+
+    /** Nullable so queue payloads serialized before this flag existed remain valid. */
+    public ?bool $force = null;
+
+    public function __construct(bool $force = false)
+    {
+        $this->force = $force;
+    }
+
+    public function uniqueId(): string
+    {
+        return 'rubix-sast-training';
+    }
+
     public function handle(RubixTriageService $triageService): void
     {
+        $forced = $this->force ?? false;
+
+        if (! $forced && ! $this->hasNewLabels()) {
+            cache()->forget('sast:retrain-lock');
+            Log::info('SAST model retraining skipped because no labels changed.');
+
+            return;
+        }
+
         Log::info('SAST model retraining started.');
 
         try {
             $metrics = $triageService->train();
 
-            ModelState::create([
-                'trained_at' => now(),
-                'sample_size' => $metrics['sample_size'],
-                'precision' => $metrics['precision'],
-                'recall' => $metrics['recall'],
-                'f1_score' => $metrics['f1_score'],
-                'confusion_matrix' => $metrics['confusion'],
-            ]);
-
-            Log::info('SAST model retraining complete.', $metrics);
+            if ($metrics['deployment_status'] === 'deployed') {
+                Log::info('SAST model candidate passed validation and was deployed.', $metrics);
+            } else {
+                Log::warning('SAST model candidate was rejected; active model unchanged.', $metrics);
+            }
         } catch (InsufficientTrainingDataException $e) {
             // Expected during cold start — not a failure worth alerting on.
             Log::info('SAST model retraining skipped.', ['reason' => $e->getMessage()]);
@@ -56,5 +78,20 @@ class TrainSastModelJob implements ShouldQueue
     {
         cache()->forget('sast:retrain-lock');
         Log::error('SAST model retraining failed.', ['error' => $e->getMessage()]);
+    }
+
+    private function hasNewLabels(): bool
+    {
+        $lastTrainedAt = ModelState::max('trained_at');
+
+        if ($lastTrainedAt === null) {
+            return true;
+        }
+
+        return Finding::query()
+            ->whereNotNull('final_label')
+            ->whereNotNull('feature_vector')
+            ->where('updated_at', '>', $lastTrainedAt)
+            ->exists();
     }
 }

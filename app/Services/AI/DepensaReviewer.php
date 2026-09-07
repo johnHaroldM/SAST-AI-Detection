@@ -21,7 +21,7 @@ class DepensaReviewer
     /**
      * @return array{reviewer: string, model: string, prompt_version: string, result: array<string, mixed>, usage: array<string, mixed>, raw: array<string, mixed>}
      */
-    public function review(Finding $finding): array
+    public function review(Finding $finding, ?string $keepAlive = null): array
     {
         $context = $finding->aiContext;
 
@@ -102,7 +102,9 @@ PROMPT
         $response = $this->ollama->chat(
             $model,
             $messages,
-            AiAssessmentSchema::make()
+            AiAssessmentSchema::make(),
+            $keepAlive,
+            'depensa',
         );
 
         return [

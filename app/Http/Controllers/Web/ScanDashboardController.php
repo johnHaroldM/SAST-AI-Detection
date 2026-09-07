@@ -68,6 +68,8 @@ class ScanDashboardController extends Controller
 
     public function show(Scan $scan, TriageGuidance $guidance): Response
     {
+        $userId = (int) auth()->id();
+
         $scan->loadCount([
             'findings',
             'findings as true_positive_count' => fn ($q) => $q->where('predicted_label', 'true_positive'),
@@ -78,22 +80,39 @@ class ScanDashboardController extends Controller
         ]);
 
         $findings = $scan->findings()
-            ->with(['rule', 'aiAssessments' => fn ($query) => $query->orderByRaw(
-                "CASE reviewer WHEN 'adjudicator' THEN 0 WHEN 'atake' THEN 1 WHEN 'depensa' THEN 2 ELSE 3 END"
-            )->orderByDesc('completed_at')->orderByDesc('id')])
+            ->with([
+                'rule',
+                'feedback:id,finding_id,source',
+                'aiAssessments' => fn ($query) => $query
+                    ->with(['feedback' => fn ($feedback) => $feedback->where('user_id', $userId)])
+                    ->orderByRaw(
+                        "CASE reviewer WHEN 'adjudicator' THEN 0 WHEN 'atake' THEN 1 WHEN 'depensa' THEN 2 ELSE 3 END"
+                    )
+                    ->orderByDesc('completed_at')
+                    ->orderByDesc('id'),
+            ])
             ->orderByDesc('tp_probability')
             ->paginate(100);
 
         $findings->getCollection()->each(function ($finding) {
+            $trustedFinalLabel = $finding->feedback?->source === 'ai_pseudo'
+                ? null
+                : $finding->final_label;
             $latestAssessments = $finding->aiAssessments->unique('reviewer')->values();
 
-            $latestAssessments->each(function ($assessment) use ($finding) {
+            $latestAssessments->each(function ($assessment) use ($finding, $trustedFinalLabel) {
                 $assessment->setAttribute(
                     'evaluation_outcome',
                     AiEvaluationOutcome::classify($finding->predicted_label, $assessment->classification),
                 );
+                $assessment->setAttribute(
+                    'human_evaluation_outcome',
+                    AiEvaluationOutcome::classifyAgainstHuman($trustedFinalLabel, $assessment->classification),
+                );
             });
 
+            $finding->setAttribute('trusted_final_label', $trustedFinalLabel);
+            $finding->unsetRelation('feedback');
             $finding->setRelation('aiAssessments', $latestAssessments);
         });
 
@@ -195,7 +214,7 @@ class ScanDashboardController extends Controller
             'heartbeat_at' => now(),
         ]);
 
-        AnalyzeFindingsWithAninoJob::dispatch($scan->id, $run->id)
+        AnalyzeFindingsWithAninoJob::dispatch($scan->id, $run->id, 0)
             ->onQueue(config('services.ollama.queue', 'ai-analysis'));
 
         $findingLabel = $runTarget === 1 ? 'finding' : 'findings';

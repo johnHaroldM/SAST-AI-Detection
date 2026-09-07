@@ -21,12 +21,49 @@ const EMPTY_OUTCOME_MATRIX = {
   unresolved: 0,
 };
 
+const EMPTY_HUMAN_OUTCOME_MATRIX = {
+  ...EMPTY_OUTCOME_MATRIX,
+  awaiting_review: 0,
+};
+
 const OUTCOME_COLUMNS = [
   { key: 'true_positive', short: 'TP', label: 'True positive', tone: 'text-signal-red' },
   { key: 'false_positive', short: 'FP', label: 'False positive', tone: 'text-signal-green' },
   { key: 'true_negative', short: 'TN', label: 'True negative', tone: 'text-cyan-300' },
   { key: 'false_negative', short: 'FN', label: 'False negative', tone: 'text-amber' },
   { key: 'unresolved', short: '?', label: 'Unresolved', tone: 'text-fog' },
+];
+
+const HUMAN_OUTCOME_COLUMNS = [
+  ...OUTCOME_COLUMNS,
+  { key: 'awaiting_review', short: 'Wait', label: 'Awaiting human label', tone: 'text-fog' },
+];
+
+const ASSESSMENT_FEEDBACK_ACTIONS = [
+  {
+    key: 'accurate',
+    label: 'Accurate',
+    payload: { verdict: 'correct' },
+    tone: 'border-cyan-300/40 text-cyan-300 hover:bg-cyan-300/10',
+  },
+  {
+    key: 'correct_tp',
+    label: 'Correct answer TP',
+    payload: { verdict: 'incorrect', corrected_classification: 'confirmed_tp' },
+    tone: 'border-signal-red/40 text-signal-red hover:bg-signal-red/10',
+  },
+  {
+    key: 'correct_fp',
+    label: 'Correct answer FP',
+    payload: { verdict: 'incorrect', corrected_classification: 'confirmed_fp' },
+    tone: 'border-signal-green/40 text-signal-green hover:bg-signal-green/10',
+  },
+  {
+    key: 'missing_context',
+    label: 'Missing context',
+    payload: { verdict: 'insufficient_context', reason_codes: ['missing_context'] },
+    tone: 'border-amber/40 text-amber hover:bg-amber/10',
+  },
 ];
 
 /**
@@ -54,6 +91,10 @@ export default function ScanShow({ scan, findings: initialFindings, guidance = {
       atake: { ...EMPTY_OUTCOME_MATRIX },
       depensa: { ...EMPTY_OUTCOME_MATRIX },
     },
+    human_outcomes: {
+      atake: { ...EMPTY_HUMAN_OUTCOME_MATRIX },
+      depensa: { ...EMPTY_HUMAN_OUTCOME_MATRIX },
+    },
     retryable_findings: 0,
     training_candidates: 0,
     training_promoted: 0,
@@ -69,11 +110,9 @@ export default function ScanShow({ scan, findings: initialFindings, guidance = {
   const retryAvailable = (aninoStatus.retryable_findings ?? 0) > 0;
 
   const fetchAninoStatus = useCallback(async () => {
-    if (!anino.enabled) return;
-
     const response = await axios.get(`/api/scans/${scan.id}/anino-status`);
     setAninoStatus(response.data);
-  }, [anino.enabled, scan.id]);
+  }, [scan.id]);
 
   useEffect(() => {
     fetchAninoStatus();
@@ -93,9 +132,12 @@ export default function ScanShow({ scan, findings: initialFindings, guidance = {
 
   async function triageSingle(finding, correctedLabel) {
     setFindings((prev) =>
-      prev.map((f) => (f.id === finding.id ? { ...f, status: 'triaged', final_label: correctedLabel } : f))
+      prev.map((f) => (f.id === finding.id
+        ? { ...f, status: 'triaged', final_label: correctedLabel, trusted_final_label: correctedLabel }
+        : f))
     );
     await axios.post(`/api/findings/${finding.id}/triage`, { corrected_label: correctedLabel });
+    await fetchAninoStatus();
   }
 
   async function triageBulk(correctedLabel) {
@@ -103,13 +145,49 @@ export default function ScanShow({ scan, findings: initialFindings, guidance = {
     if (ids.length === 0) return;
 
     setFindings((prev) =>
-      prev.map((f) => (ids.includes(f.id) ? { ...f, status: 'triaged', final_label: correctedLabel } : f))
+      prev.map((f) => (ids.includes(f.id)
+        ? { ...f, status: 'triaged', final_label: correctedLabel, trusted_final_label: correctedLabel }
+        : f))
     );
     setSelected(new Set());
 
     await axios.post('/api/findings/bulk-triage', {
       decisions: ids.map((id) => ({ finding_id: id, corrected_label: correctedLabel })),
     });
+    await fetchAninoStatus();
+  }
+
+  async function saveAssessmentFeedback(assessmentId, payload) {
+    const response = await axios.put(`/api/ai-assessments/${assessmentId}/feedback`, payload);
+
+    updateAssessmentFeedback(assessmentId, response.data.feedback);
+  }
+
+  async function retractAssessmentFeedback(assessmentId) {
+    await axios.delete(`/api/ai-assessments/${assessmentId}/feedback`);
+
+    updateAssessmentFeedback(assessmentId, null);
+  }
+
+  function updateAssessmentFeedback(assessmentId, feedback) {
+    setFindings((previousFindings) =>
+      previousFindings.map((finding) => {
+        const assessments = finding.ai_assessments ?? [];
+
+        if (!assessments.some((assessment) => assessment.id === assessmentId)) {
+          return finding;
+        }
+
+        return {
+          ...finding,
+          ai_assessments: assessments.map((assessment) =>
+            assessment.id === assessmentId
+              ? { ...assessment, feedback: feedback ? [feedback] : [] }
+              : assessment
+          ),
+        };
+      })
+    );
   }
 
   function toggleSelected(id) {
@@ -221,6 +299,8 @@ export default function ScanShow({ scan, findings: initialFindings, guidance = {
               onToggleExpand={() => setExpandedId(expandedId === finding.id ? null : finding.id)}
               onToggleSelect={() => toggleSelected(finding.id)}
               onTriage={(label) => triageSingle(finding, label)}
+              onSaveAssessmentFeedback={saveAssessmentFeedback}
+              onRetractAssessmentFeedback={retractAssessmentFeedback}
             />
           ))
         )}
@@ -313,6 +393,7 @@ function AninoProgress({ status }) {
       </div>
 
       <OutcomeMatrix outcomes={status.outcomes} />
+      <HumanOutcomeMatrix outcomes={status.human_outcomes} />
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <MetricBox label="Trainable labels" value={status.training_candidates ?? 0} detail={`>= ${Math.round((status.training_threshold ?? 0.85) * 100)}% confidence`} />
@@ -336,10 +417,13 @@ function AninoProgress({ status }) {
 function OutcomeMatrix({ outcomes = {} }) {
   return (
     <div className="mt-4 border-t border-hairline pt-3">
-      <div className="mb-2 font-mono text-[10px] uppercase text-fog">Reviewer flags</div>
+      <div className="text-xs font-medium text-paper">Rubix scored against AI opinion</div>
+      <div className="mt-0.5 text-[11px] text-fog">
+        Agreement proxy only. ATAKE and DEPENSA are advisory labels, not ground truth.
+      </div>
       <div className="overflow-x-auto">
-        <div className="grid min-w-[28rem] grid-cols-[minmax(7rem,1fr)_repeat(5,minmax(3rem,0.55fr))] items-center gap-px overflow-hidden rounded border border-hairline bg-hairline text-center font-mono">
-          <div className="bg-panel px-3 py-2 text-left text-[10px] uppercase text-fog">Model</div>
+        <div className="mt-2 grid min-w-[28rem] grid-cols-[minmax(7rem,1fr)_repeat(5,minmax(3rem,0.55fr))] items-center gap-px overflow-hidden rounded border border-hairline bg-hairline text-center font-mono">
+          <div className="bg-panel px-3 py-2 text-left text-[10px] text-fog">AI reference</div>
           {OUTCOME_COLUMNS.map((column) => (
             <abbr
               key={column.key}
@@ -350,7 +434,12 @@ function OutcomeMatrix({ outcomes = {} }) {
             </abbr>
           ))}
           {['atake', 'depensa'].map((reviewer) => (
-            <OutcomeRow key={reviewer} reviewer={reviewer} outcomes={outcomes[reviewer]} />
+            <OutcomeRow
+              key={reviewer}
+              reviewer={reviewer}
+              outcomes={outcomes[reviewer]}
+              columns={OUTCOME_COLUMNS}
+            />
           ))}
         </div>
       </div>
@@ -358,11 +447,44 @@ function OutcomeMatrix({ outcomes = {} }) {
   );
 }
 
-function OutcomeRow({ reviewer, outcomes = EMPTY_OUTCOME_MATRIX }) {
+function HumanOutcomeMatrix({ outcomes = {} }) {
+  return (
+    <div className="mt-4 border-l-2 border-signal-green/60 pl-3">
+      <div className="text-xs font-medium text-paper">Human-verified performance</div>
+      <div className="mt-0.5 text-[11px] text-fog">
+        AI predictions scored against trusted human, benchmark, or imported labels. AI-promoted labels are excluded.
+      </div>
+      <div className="overflow-x-auto">
+        <div className="mt-2 grid min-w-[32rem] grid-cols-[minmax(7rem,1fr)_repeat(6,minmax(3rem,0.55fr))] items-center gap-px overflow-hidden rounded border border-hairline bg-hairline text-center font-mono">
+          <div className="bg-panel px-3 py-2 text-left text-[10px] text-fog">AI reviewer</div>
+          {HUMAN_OUTCOME_COLUMNS.map((column) => (
+            <abbr
+              key={column.key}
+              title={column.label}
+              className={`bg-panel px-2 py-2 text-[10px] no-underline ${column.tone}`}
+            >
+              {column.short}
+            </abbr>
+          ))}
+          {['atake', 'depensa'].map((reviewer) => (
+            <OutcomeRow
+              key={reviewer}
+              reviewer={reviewer}
+              outcomes={outcomes[reviewer]}
+              columns={HUMAN_OUTCOME_COLUMNS}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OutcomeRow({ reviewer, outcomes = EMPTY_OUTCOME_MATRIX, columns }) {
   return (
     <>
       <div className="bg-ink px-3 py-2 text-left text-[11px] uppercase text-paper">{reviewer}</div>
-      {OUTCOME_COLUMNS.map((column) => (
+      {columns.map((column) => (
         <div key={column.key} className={`bg-ink px-2 py-2 text-sm tabular-nums ${column.tone}`}>
           {outcomes?.[column.key] ?? 0}
         </div>
@@ -449,7 +571,17 @@ function AninoLogs({ logs, enabled }) {
   );
 }
 
-function FindingRow({ finding, advice, expanded, selected, onToggleExpand, onToggleSelect, onTriage }) {
+function FindingRow({
+  finding,
+  advice,
+  expanded,
+  selected,
+  onToggleExpand,
+  onToggleSelect,
+  onTriage,
+  onSaveAssessmentFeedback,
+  onRetractAssessmentFeedback,
+}) {
   const isTriaged = finding.status === 'triaged';
 
   return (
@@ -478,7 +610,7 @@ function FindingRow({ finding, advice, expanded, selected, onToggleExpand, onTog
         <div className="flex items-center gap-1.5 w-56 justify-end">
           {isTriaged ? (
             <span className="font-mono text-[11px] text-fog">
-              confirmed · {finding.final_label === 'true_positive' ? 'TP' : 'FP'}
+              {finding.trusted_final_label == null ? 'AI-promoted' : 'confirmed'} · {finding.final_label === 'true_positive' ? 'TP' : 'FP'}
             </span>
           ) : (
             <>
@@ -509,14 +641,20 @@ function FindingRow({ finding, advice, expanded, selected, onToggleExpand, onTog
 
           {advice && <Remediation advice={advice} />}
 
-          <AiAssessments assessments={finding.ai_assessments ?? []} predictedLabel={finding.predicted_label} />
+          <AiAssessments
+            assessments={finding.ai_assessments ?? []}
+            predictedLabel={finding.predicted_label}
+            trustedFinalLabel={finding.trusted_final_label}
+            onSaveFeedback={onSaveAssessmentFeedback}
+            onRetractFeedback={onRetractAssessmentFeedback}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function AiAssessments({ assessments, predictedLabel }) {
+function AiAssessments({ assessments, predictedLabel, trustedFinalLabel, onSaveFeedback, onRetractFeedback }) {
   if (assessments.length === 0) {
     return (
       <div className="rounded border border-hairline bg-panel/50 p-3 text-xs text-fog">
@@ -528,15 +666,24 @@ function AiAssessments({ assessments, predictedLabel }) {
   return (
     <div className="grid gap-2 md:grid-cols-3">
       {assessments.map((assessment) => (
-        <AiAssessmentCard key={assessment.id} assessment={assessment} predictedLabel={predictedLabel} />
+        <AiAssessmentCard
+          key={assessment.id}
+          assessment={assessment}
+          predictedLabel={predictedLabel}
+          trustedFinalLabel={trustedFinalLabel}
+          onSaveFeedback={onSaveFeedback}
+          onRetractFeedback={onRetractFeedback}
+        />
       ))}
     </div>
   );
 }
 
-function AiAssessmentCard({ assessment, predictedLabel }) {
+function AiAssessmentCard({ assessment, predictedLabel, trustedFinalLabel, onSaveFeedback, onRetractFeedback }) {
   const confidence = assessment.confidence == null ? 'n/a' : `${Math.round(assessment.confidence * 100)}%`;
-  const outcome = resolveEvaluationOutcome(assessment, predictedLabel);
+  const rubixOutcome = resolveEvaluationOutcome(assessment, predictedLabel);
+  const humanOutcome = resolveHumanEvaluationOutcome(assessment, trustedFinalLabel);
+  const acceptsFeedback = ['atake', 'depensa'].includes(assessment.reviewer);
 
   return (
     <div className="rounded border border-hairline bg-panel/50 p-3">
@@ -547,10 +694,18 @@ function AiAssessmentCard({ assessment, predictedLabel }) {
         </div>
         <div className="flex flex-col items-end gap-1">
           <span
-            title={`${assessment.reviewer.toUpperCase()} compared with Rubix: ${formatClassification(outcome)}`}
-            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase ${outcomeTone(outcome)}`}
+            title={`Rubix scored against ${assessment.reviewer.toUpperCase()}'s advisory classification (not ground truth): ${formatClassification(rubixOutcome)}`}
+            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase ${outcomeTone(rubixOutcome)}`}
           >
-            {formatClassification(outcome)}
+            Rubix {formatClassification(rubixOutcome)}
+          </span>
+          <span
+            title={humanOutcome === 'awaiting_review'
+              ? 'This AI assessment is waiting for a trusted human, benchmark, or imported label.'
+              : `${assessment.reviewer.toUpperCase()} scored against a trusted label: ${formatClassification(humanOutcome)}`}
+            className={`rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase ${outcomeTone(humanOutcome)}`}
+          >
+            Human {formatClassification(humanOutcome)}
           </span>
           <div className="font-mono text-[11px] text-fog">{confidence}</div>
         </div>
@@ -571,7 +726,90 @@ function AiAssessmentCard({ assessment, predictedLabel }) {
         Why this flag
         <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
       </Link>
+
+      {acceptsFeedback && (
+        <AssessmentFeedbackControls
+          assessment={assessment}
+          onSave={onSaveFeedback}
+          onRetract={onRetractFeedback}
+        />
+      )}
     </div>
+  );
+}
+
+function AssessmentFeedbackControls({ assessment, onSave, onRetract }) {
+  const [savingAction, setSavingAction] = useState(null);
+  const [error, setError] = useState(null);
+  const feedback = assessment.feedback?.[0] ?? null;
+
+  async function save(action) {
+    setSavingAction(action.key);
+    setError(null);
+
+    try {
+      await onSave(assessment.id, action.payload);
+    } catch (requestError) {
+      setError(assessmentFeedbackError(requestError, 'Feedback could not be saved. Try again.'));
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
+  async function retract() {
+    setSavingAction('retract');
+    setError(null);
+
+    try {
+      await onRetract(assessment.id);
+    } catch (requestError) {
+      setError(assessmentFeedbackError(requestError, 'Feedback could not be retracted. Try again.'));
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
+  return (
+    <fieldset disabled={savingAction !== null} className="mt-3 border-t border-hairline pt-3">
+      <legend className="sr-only">Review {assessment.reviewer} assessment</legend>
+
+      <div className="flex flex-wrap gap-1.5">
+        {ASSESSMENT_FEEDBACK_ACTIONS.map((action) => {
+          const active = feedbackMatchesAction(feedback, action.key);
+
+          return (
+            <button
+              key={action.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => save(action)}
+              className={`rounded border px-2 py-1 text-[11px] font-medium disabled:cursor-wait disabled:opacity-50 ${
+                active ? 'bg-paper/10 ring-1 ring-inset ring-paper/30' : action.tone
+              }`}
+            >
+              {savingAction === action.key ? 'Saving...' : action.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-2 flex min-h-5 items-center justify-between gap-2 text-[11px]">
+        <span className="text-fog" aria-live="polite">
+          {feedback ? `Your verdict: ${formatFeedbackVerdict(feedback)}` : 'Your verdict: Not reviewed'}
+        </span>
+        {feedback && (
+          <button
+            type="button"
+            onClick={retract}
+            className="font-medium text-fog underline decoration-hairline underline-offset-2 hover:text-paper disabled:cursor-wait disabled:opacity-50"
+          >
+            {savingAction === 'retract' ? 'Retracting...' : 'Retract'}
+          </button>
+        )}
+      </div>
+
+      {error && <div role="alert" className="mt-1 text-[11px] text-signal-red">{error}</div>}
+    </fieldset>
   );
 }
 
@@ -589,6 +827,61 @@ function resolveEvaluationOutcome(assessment, predictedLabel) {
   if (predictedPositive) return actualPositive ? 'true_positive' : 'false_positive';
 
   return actualPositive ? 'false_negative' : 'true_negative';
+}
+
+function resolveHumanEvaluationOutcome(assessment, trustedFinalLabel) {
+  if (trustedFinalLabel == null) return 'awaiting_review';
+
+  if (assessment.human_evaluation_outcome && assessment.human_evaluation_outcome !== 'unresolved') {
+    return assessment.human_evaluation_outcome;
+  }
+
+  const predictedPositive = ['confirmed_tp', 'likely_tp'].includes(assessment.classification)
+    ? true
+    : ['confirmed_fp', 'likely_fp'].includes(assessment.classification)
+      ? false
+      : null;
+  const actualPositive = trustedFinalLabel === 'true_positive'
+    ? true
+    : trustedFinalLabel === 'false_positive'
+      ? false
+      : null;
+
+  if (predictedPositive == null || actualPositive == null) return 'unresolved';
+  if (predictedPositive) return actualPositive ? 'true_positive' : 'false_positive';
+
+  return actualPositive ? 'false_negative' : 'true_negative';
+}
+
+function feedbackMatchesAction(feedback, actionKey) {
+  if (!feedback) return false;
+  if (actionKey === 'accurate') return feedback.verdict === 'correct';
+  if (actionKey === 'correct_tp') {
+    return feedback.verdict === 'incorrect' && feedback.corrected_classification === 'confirmed_tp';
+  }
+  if (actionKey === 'correct_fp') {
+    return feedback.verdict === 'incorrect' && feedback.corrected_classification === 'confirmed_fp';
+  }
+
+  return feedback.verdict === 'insufficient_context';
+}
+
+function formatFeedbackVerdict(feedback) {
+  if (feedback.verdict === 'correct') return 'Accurate';
+  if (feedback.verdict === 'insufficient_context') return 'Missing context';
+  if (feedback.verdict === 'incorrect') {
+    if (['confirmed_tp', 'likely_tp'].includes(feedback.corrected_classification)) return 'Correct answer TP';
+    if (['confirmed_fp', 'likely_fp'].includes(feedback.corrected_classification)) return 'Correct answer FP';
+  }
+
+  return formatClassification(feedback.verdict);
+}
+
+function assessmentFeedbackError(error, fallback) {
+  const errors = error?.response?.data?.errors;
+  const firstMessage = errors ? Object.values(errors).flat().find(Boolean) : null;
+
+  return firstMessage ?? error?.response?.data?.message ?? fallback;
 }
 
 function outcomeTone(outcome) {

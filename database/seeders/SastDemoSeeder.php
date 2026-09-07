@@ -9,12 +9,11 @@ use App\Models\Scan;
 use Illuminate\Database\Seeder;
 
 /**
- * Seeds a labeled findings set large enough to train the first model.
+ * Seeds an illustrative labeled findings set for local UI demonstrations.
  *
- * The app cannot score anything until a model exists, and a model cannot be
- * trained until a human has labeled enough findings — so a brand new install
- * has no way to see the ML half of the system working. This seeder produces
- * a realistic, learnable dataset to break that deadlock during development.
+ * These labels are generated from a heuristic rather than an independent
+ * security review. They deliberately have no trusted TriageFeedback
+ * provenance and therefore cannot enter Rubix certification data.
  *
  * Labels follow a deliberate signal rather than coin flips: findings that are
  * sanitized, shallow, in test files, or attached to historically noisy rules
@@ -74,8 +73,8 @@ class SastDemoSeeder extends Seeder
 
         $labeled = Finding::whereNotNull('final_label')->count();
 
-        $this->command->info("Seeded {$labeled} labeled findings across ".self::SCANS.' scans.');
-        $this->command->info('Next: php artisan sast:train --sync');
+        $this->command->info("Seeded {$labeled} illustrative findings across ".self::SCANS.' scans.');
+        $this->command->warn('Demo labels are excluded from certified Rubix training; add verified human/benchmark/import feedback first.');
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Services\AI\AiEvaluationOutcome;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class AiAssessment extends Model
 {
@@ -54,6 +55,14 @@ class AiAssessment extends Model
     public function finding(): BelongsTo
     {
         return $this->belongsTo(Finding::class);
+    }
+
+    /**
+     * @return HasMany<AiAssessmentFeedback, $this>
+     */
+    public function feedback(): HasMany
+    {
+        return $this->hasMany(AiAssessmentFeedback::class, 'assessment_id');
     }
 
     /**

@@ -3,6 +3,7 @@
 use App\Jobs\AnalyzeFindingsWithAninoJob;
 use App\Jobs\TrainSastModelJob;
 use App\Models\AiAssessment;
+use App\Models\AiAssessmentFeedback;
 use App\Models\AninoAnalysisRun;
 use App\Models\Finding;
 use App\Models\FindingAiContext;
@@ -17,6 +18,7 @@ use App\Services\AI\AtakeReviewer;
 use App\Services\AI\DepensaReviewer;
 use App\Services\AI\FindingAdjudicator;
 use App\Services\AI\OllamaClient;
+use App\Services\AI\OllamaUnavailableException;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -62,6 +64,83 @@ test('anino percent confidence is normalized before storage', function () {
         ->and(AiAssessment::sole()->evaluation_outcome)->toBe('false_positive');
 });
 
+test('anino preserves reviewed assessment history when the input context changes', function () {
+    $user = User::factory()->create();
+    $scan = Scan::factory()->create();
+    $finding = Finding::factory()->for($scan)->create();
+    $context = FindingAiContext::create([
+        'finding_id' => $finding->id,
+        'source_commit' => $scan->commit_sha,
+        'context_hash' => hash('sha256', 'old scanner evidence'),
+        'metadata' => [],
+        'context' => 'old scanner evidence',
+    ]);
+    $oldAssessment = AiAssessment::create([
+        'finding_id' => $finding->id,
+        'reviewer' => 'atake',
+        'model' => 'test-model',
+        'classification' => 'confirmed_fp',
+        'prompt_version' => AtakeReviewer::PROMPT_VERSION,
+        'context_hash' => $context->context_hash,
+        'completed_at' => now()->subMinute(),
+    ]);
+    AiAssessmentFeedback::create([
+        'assessment_id' => $oldAssessment->id,
+        'user_id' => $user->id,
+        'verdict' => 'correct',
+        'reviewed_at' => now()->subMinute(),
+    ]);
+
+    $context->update([
+        'context_hash' => hash('sha256', 'new scanner evidence'),
+        'context' => 'new scanner evidence',
+    ]);
+    $finding->unsetRelation('aiContext');
+
+    $method = new ReflectionMethod(AnalyzeFindingsWithAninoJob::class, 'storeAssessment');
+    $method->invoke(
+        new AnalyzeFindingsWithAninoJob($scan->id),
+        $finding,
+        aninoReview('atake', 'test-model'),
+    );
+
+    expect(AiAssessment::where('finding_id', $finding->id)->where('reviewer', 'atake')->count())->toBe(2)
+        ->and($oldAssessment->fresh()->classification)->toBe('confirmed_fp')
+        ->and($oldAssessment->fresh()->feedback)->toHaveCount(1)
+        ->and(AiAssessment::query()->latest('id')->firstOrFail()->context_hash)->toBe($context->fresh()->context_hash);
+});
+
+test('anino requeues a finding when its evidence context changes', function () {
+    $scan = Scan::factory()->create();
+    $finding = Finding::factory()->for($scan)->create(['severity' => 'CRITICAL']);
+    $context = FindingAiContext::create([
+        'finding_id' => $finding->id,
+        'source_commit' => $scan->commit_sha,
+        'context_hash' => hash('sha256', 'old scanner evidence'),
+        'metadata' => [],
+        'context' => 'old scanner evidence',
+    ]);
+
+    AiAssessment::create([
+        'finding_id' => $finding->id,
+        'reviewer' => 'adjudicator',
+        'model' => 'deterministic-rules-v1',
+        'classification' => 'needs_validation',
+        'prompt_version' => 'adjudicator-v1',
+        'context_hash' => $context->context_hash,
+        'completed_at' => now(),
+    ]);
+
+    expect(app(AninoCandidateSelector::class)->forScan($scan)->all())->toBeEmpty();
+
+    $context->update([
+        'context_hash' => hash('sha256', 'source-backed evidence'),
+        'context' => 'source-backed evidence',
+    ]);
+
+    expect(app(AninoCandidateSelector::class)->forScan($scan)->all())->toBe([$finding->id]);
+});
+
 test('ai reviews are compared with rubix predictions as confusion matrix outcomes', function () {
     expect(AiEvaluationOutcome::classify('true_positive', 'likely_tp'))->toBe('true_positive')
         ->and(AiEvaluationOutcome::classify('true_positive', 'confirmed_fp'))->toBe('false_positive')
@@ -96,7 +175,7 @@ test('scan anino status reports reviewer progress and recent logs', function () 
         'missing_evidence' => [],
         'remediation' => [],
         'reasoning_summary' => 'Looks reachable.',
-        'prompt_version' => 'atake-v1',
+        'prompt_version' => AtakeReviewer::PROMPT_VERSION,
         'completed_at' => now(),
     ]);
 
@@ -198,6 +277,7 @@ test('anino lock skips duplicate runs with a clear status', function () {
             app(DepensaReviewer::class),
             app(FindingAdjudicator::class),
             app(AninoCandidateSelector::class),
+            app(OllamaClient::class),
         );
     } finally {
         $lock->release();
@@ -232,7 +312,7 @@ test('stale anino runs release abandoned locks and can be restarted', function (
     $replacement->release();
 });
 
-test('anino processes one finding per queued job', function () {
+test('anino runs one reviewer per job in model-major order and unloads at phase boundaries', function () {
     Queue::fake();
     config()->set('services.ollama.models.atake', 'test-atake');
     config()->set('services.ollama.models.depensa', 'test-depensa');
@@ -260,28 +340,75 @@ test('anino processes one finding per queued job', function () {
     ]);
     $atake = Mockery::mock(AtakeReviewer::class);
     $depensa = Mockery::mock(DepensaReviewer::class);
-    $atake->shouldReceive('review')->once()->andReturn(aninoReview('atake', 'test-atake'));
-    $depensa->shouldReceive('review')->once()->andReturn(aninoReview('depensa', 'test-depensa'));
+    $ollama = Mockery::mock(OllamaClient::class);
+    $atake->shouldReceive('review')
+        ->once()
+        ->ordered()
+        ->with(Mockery::on(fn (Finding $reviewed) => $reviewed->id === $findings[0]->id), '5m')
+        ->andReturn(aninoReview('atake', 'test-atake'));
+    $atake->shouldReceive('review')
+        ->once()
+        ->ordered()
+        ->with(Mockery::on(fn (Finding $reviewed) => $reviewed->id === $findings[1]->id), '5m')
+        ->andReturn(aninoReview('atake', 'test-atake'));
+    $ollama->shouldReceive('unload')->once()->ordered()->with('test-atake');
+    $depensa->shouldReceive('review')
+        ->once()
+        ->ordered()
+        ->with(Mockery::on(fn (Finding $reviewed) => $reviewed->id === $findings[0]->id), '5m')
+        ->andReturn(aninoReview('depensa', 'test-depensa'));
+    $depensa->shouldReceive('review')
+        ->once()
+        ->ordered()
+        ->with(Mockery::on(fn (Finding $reviewed) => $reviewed->id === $findings[1]->id), '5m')
+        ->andReturn(aninoReview('depensa', 'test-depensa'));
+    $ollama->shouldReceive('unload')->once()->ordered()->with('test-depensa');
 
-    (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
-        $atake,
-        $depensa,
-        app(FindingAdjudicator::class),
-        app(AninoCandidateSelector::class),
-    );
+    $runStep = function () use ($scan, $run, $atake, $depensa, $ollama): void {
+        (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
+            $atake,
+            $depensa,
+            app(FindingAdjudicator::class),
+            app(AninoCandidateSelector::class),
+            $ollama,
+        );
+    };
+
+    $runStep();
 
     $run->refresh();
 
-    expect($run->processed_findings)->toBe(1)
-        ->and($run->reviewed_findings)->toBe(1)
+    expect($run->next_step)->toBe(1)
+        ->and($run->processed_findings)->toBe(0)
         ->and($run->status)->toBe('running')
-        ->and(AiAssessment::where('finding_id', $findings[0]->id)->count())->toBe(3)
+        ->and(AiAssessment::where('finding_id', $findings[0]->id)->where('reviewer', 'atake')->count())->toBe(1)
         ->and(AiAssessment::where('finding_id', $findings[1]->id)->count())->toBe(0);
 
-    Queue::assertPushed(AnalyzeFindingsWithAninoJob::class, fn ($job) => $job->runId === $run->id);
+    $runStep();
+    expect($run->fresh()->next_step)->toBe(2)
+        ->and($run->fresh()->phase)->toBe('depensa')
+        ->and(AiAssessment::where('reviewer', 'atake')->count())->toBe(2)
+        ->and(AiAssessment::where('reviewer', 'depensa')->count())->toBe(0);
+
+    $runStep();
+    expect($run->fresh()->next_step)->toBe(3)
+        ->and($run->fresh()->processed_findings)->toBe(1)
+        ->and($run->fresh()->reviewed_findings)->toBe(1)
+        ->and(AiAssessment::where('finding_id', $findings[0]->id)->count())->toBe(3)
+        ->and(AiAssessment::where('finding_id', $findings[1]->id)->count())->toBe(1);
+
+    $runStep();
+    expect($run->fresh()->next_step)->toBe(4)
+        ->and($run->fresh()->status)->toBe('complete')
+        ->and($run->fresh()->processed_findings)->toBe(2)
+        ->and($run->fresh()->reviewed_findings)->toBe(2)
+        ->and($run->fresh()->failed_findings)->toBe(0)
+        ->and(AiAssessment::count())->toBe(6);
+
+    Queue::assertPushed(AnalyzeFindingsWithAninoJob::class, 3);
 });
 
-test('anino resumes a partially reviewed finding without repeating the model call', function () {
+test('anino advances a reused reviewer step and resumes with the missing reviewer only', function () {
     Queue::fake();
     config()->set('services.ollama.models.atake', 'test-atake');
     config()->set('services.ollama.models.depensa', 'test-depensa');
@@ -301,7 +428,7 @@ test('anino resumes a partially reviewed finding without repeating the model cal
         'model' => 'test-atake',
         'classification' => 'likely_tp',
         'confidence' => 0.8,
-        'prompt_version' => 'atake-v1',
+        'prompt_version' => AtakeReviewer::PROMPT_VERSION,
         'context_hash' => $context->context_hash,
         'completed_at' => now(),
     ]);
@@ -315,20 +442,223 @@ test('anino resumes a partially reviewed finding without repeating the model cal
     ]);
     $atake = Mockery::mock(AtakeReviewer::class);
     $depensa = Mockery::mock(DepensaReviewer::class);
+    $ollama = Mockery::mock(OllamaClient::class);
     $atake->shouldNotReceive('review');
-    $depensa->shouldReceive('review')->once()->andReturn(aninoReview('depensa', 'test-depensa'));
+    $depensa->shouldReceive('review')
+        ->once()
+        ->with(Mockery::on(fn (Finding $reviewed) => $reviewed->id === $finding->id), '5m')
+        ->andReturn(aninoReview('depensa', 'test-depensa'));
+    $ollama->shouldReceive('unload')->once()->with('test-atake');
+    $ollama->shouldReceive('unload')->once()->with('test-depensa');
 
     (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
         $atake,
         $depensa,
         app(FindingAdjudicator::class),
         app(AninoCandidateSelector::class),
+        $ollama,
+    );
+
+    expect($run->fresh()->status)->toBe('running')
+        ->and($run->fresh()->next_step)->toBe(1)
+        ->and($run->fresh()->processed_findings)->toBe(0)
+        ->and(AiAssessment::where('finding_id', $finding->id)->where('reviewer', 'depensa')->exists())->toBeFalse();
+
+    (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
+        $atake,
+        $depensa,
+        app(FindingAdjudicator::class),
+        app(AninoCandidateSelector::class),
+        $ollama,
     );
 
     expect($run->fresh()->status)->toBe('complete')
+        ->and($run->fresh()->next_step)->toBe(2)
         ->and($run->fresh()->processed_findings)->toBe(1)
         ->and(AiAssessment::where('finding_id', $finding->id)->where('reviewer', 'atake')->count())->toBe(1)
         ->and(AiAssessment::where('finding_id', $finding->id)->where('reviewer', 'adjudicator')->exists())->toBeTrue();
+});
+
+test('anino advances a structured reviewer failure and reports terminal finding counts', function () {
+    Queue::fake();
+    config()->set('services.ollama.models.atake', 'test-atake');
+    config()->set('services.ollama.models.depensa', 'test-depensa');
+
+    $scan = Scan::factory()->create();
+    $finding = Finding::factory()->for($scan)->create();
+    FindingAiContext::create([
+        'finding_id' => $finding->id,
+        'source_commit' => $scan->commit_sha,
+        'context_hash' => hash('sha256', 'context'),
+        'metadata' => [],
+        'context' => 'scanner evidence',
+    ]);
+    $run = AninoAnalysisRun::create([
+        'scan_id' => $scan->id,
+        'status' => 'queued',
+        'phase' => 'queued',
+        'candidate_finding_ids' => [$finding->id],
+        'total_findings' => 1,
+        'heartbeat_at' => now(),
+    ]);
+    $atake = Mockery::mock(AtakeReviewer::class);
+    $depensa = Mockery::mock(DepensaReviewer::class);
+    $ollama = Mockery::mock(OllamaClient::class);
+    $atake->shouldReceive('review')->once()->andThrow(new RuntimeException('Invalid structured output.'));
+    $depensa->shouldReceive('review')->once()->andReturn(aninoReview('depensa', 'test-depensa'));
+    $ollama->shouldReceive('unload')->once()->with('test-atake');
+    $ollama->shouldReceive('unload')->once()->with('test-depensa');
+
+    foreach (range(1, 2) as $_) {
+        (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
+            $atake,
+            $depensa,
+            app(FindingAdjudicator::class),
+            app(AninoCandidateSelector::class),
+            $ollama,
+        );
+    }
+
+    expect($run->fresh()->next_step)->toBe(2)
+        ->and($run->fresh()->status)->toBe('complete_with_errors')
+        ->and($run->fresh()->processed_findings)->toBe(1)
+        ->and($run->fresh()->reviewed_findings)->toBe(0)
+        ->and($run->fresh()->failed_findings)->toBe(1);
+});
+
+test('anino circuit breaks when ollama is unavailable and leaves findings retryable', function () {
+    Queue::fake();
+    config()->set('services.ollama.models.atake', 'test-atake');
+    config()->set('services.ollama.models.depensa', 'test-depensa');
+
+    $scan = Scan::factory()->create();
+    $findings = Finding::factory()->count(2)->for($scan)->create();
+
+    foreach ($findings as $finding) {
+        FindingAiContext::create([
+            'finding_id' => $finding->id,
+            'source_commit' => $scan->commit_sha,
+            'context_hash' => hash('sha256', 'context-'.$finding->id),
+            'metadata' => [],
+            'context' => 'scanner evidence',
+        ]);
+    }
+
+    $run = AninoAnalysisRun::create([
+        'scan_id' => $scan->id,
+        'status' => 'queued',
+        'phase' => 'queued',
+        'candidate_finding_ids' => $findings->pluck('id')->all(),
+        'total_findings' => 2,
+        'heartbeat_at' => now(),
+    ]);
+    $atake = Mockery::mock(AtakeReviewer::class);
+    $depensa = Mockery::mock(DepensaReviewer::class);
+    $ollama = Mockery::mock(OllamaClient::class);
+    $atake->shouldReceive('review')->once()->andThrow(new OllamaUnavailableException('Ollama is offline.'));
+    $depensa->shouldNotReceive('review');
+    $ollama->shouldNotReceive('unload');
+
+    (new AnalyzeFindingsWithAninoJob($scan->id, $run->id))->handle(
+        $atake,
+        $depensa,
+        app(FindingAdjudicator::class),
+        app(AninoCandidateSelector::class),
+        $ollama,
+    );
+
+    expect($run->fresh()->status)->toBe('failed')
+        ->and($run->fresh()->phase)->toBe('unavailable')
+        ->and($run->fresh()->next_step)->toBe(0)
+        ->and($run->fresh()->failed_findings)->toBe(2)
+        ->and(app(AninoCandidateSelector::class)->failedFromRun($run->fresh())->all())
+        ->toEqualCanonicalizing($findings->pluck('id')->all());
+
+    Queue::assertNothingPushed();
+});
+
+test('anino waits without inference when another scan owns the ollama runtime', function () {
+    Queue::fake();
+    config()->set('services.ollama.runtime_lock', 'test-shared-ollama-runtime');
+
+    $scan = Scan::factory()->create();
+    $finding = Finding::factory()->for($scan)->create();
+    FindingAiContext::create([
+        'finding_id' => $finding->id,
+        'source_commit' => $scan->commit_sha,
+        'context_hash' => hash('sha256', 'waiting-context'),
+        'metadata' => [],
+        'context' => 'scanner evidence',
+    ]);
+    $run = AninoAnalysisRun::create([
+        'scan_id' => $scan->id,
+        'status' => 'queued',
+        'phase' => 'queued',
+        'candidate_finding_ids' => [$finding->id],
+        'total_findings' => 1,
+        'heartbeat_at' => now(),
+    ]);
+    $runtimeLock = Cache::lock('test-shared-ollama-runtime', 60);
+    expect($runtimeLock->get())->toBeTrue();
+
+    try {
+        $atake = Mockery::mock(AtakeReviewer::class);
+        $depensa = Mockery::mock(DepensaReviewer::class);
+        $ollama = Mockery::mock(OllamaClient::class);
+        $atake->shouldNotReceive('review');
+        $depensa->shouldNotReceive('review');
+        $ollama->shouldNotReceive('unload');
+
+        (new AnalyzeFindingsWithAninoJob($scan->id, $run->id, 0))->handle(
+            $atake,
+            $depensa,
+            app(FindingAdjudicator::class),
+            app(AninoCandidateSelector::class),
+            $ollama,
+        );
+    } finally {
+        $runtimeLock->release();
+    }
+
+    expect($run->fresh()->next_step)->toBe(0)
+        ->and($run->fresh()->status)->toBe('queued');
+    Queue::assertPushed(
+        AnalyzeFindingsWithAninoJob::class,
+        fn (AnalyzeFindingsWithAninoJob $job) => $job->runId === $run->id
+            && $job->expectedStep === 0,
+    );
+});
+
+test('anino ignores a continuation whose expected cursor is stale', function () {
+    Queue::fake();
+
+    $scan = Scan::factory()->create();
+    $run = AninoAnalysisRun::create([
+        'scan_id' => $scan->id,
+        'status' => 'running',
+        'phase' => 'atake',
+        'candidate_finding_ids' => [999],
+        'next_step' => 1,
+        'total_findings' => 1,
+        'heartbeat_at' => now(),
+    ]);
+    $atake = Mockery::mock(AtakeReviewer::class);
+    $depensa = Mockery::mock(DepensaReviewer::class);
+    $ollama = Mockery::mock(OllamaClient::class);
+    $atake->shouldNotReceive('review');
+    $depensa->shouldNotReceive('review');
+    $ollama->shouldNotReceive('unload');
+
+    (new AnalyzeFindingsWithAninoJob($scan->id, $run->id, 0))->handle(
+        $atake,
+        $depensa,
+        app(FindingAdjudicator::class),
+        app(AninoCandidateSelector::class),
+        $ollama,
+    );
+
+    expect($run->fresh()->next_step)->toBe(1);
+    Queue::assertNothingPushed();
 });
 
 test('ollama requests use bounded inference settings', function () {
@@ -355,6 +685,91 @@ test('ollama requests use bounded inference settings', function () {
         && $request['stream'] === false
     );
 });
+
+test('ollama accepts a phase keep alive override and explicitly unloads the model', function () {
+    config()->set('services.ollama.enabled', true);
+    Http::fake([
+        '*/api/chat' => Http::response([
+            'message' => ['content' => json_encode(aninoReview('atake', 'test-model')['result'])],
+        ]),
+        '*/api/generate' => Http::response(['done' => true]),
+    ]);
+
+    $client = app(OllamaClient::class);
+    $client->chat(
+        'test-model',
+        [['role' => 'user', 'content' => 'evidence']],
+        AiAssessmentSchema::make(),
+        '5m',
+    );
+    $client->unload('test-model');
+
+    Http::assertSentCount(2);
+    Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/api/chat')
+        && $request['keep_alive'] === '5m');
+    Http::assertSent(fn (HttpRequest $request) => str_ends_with($request->url(), '/api/generate')
+        && $request['model'] === 'test-model'
+        && $request['keep_alive'] === 0);
+});
+
+test('reviewers keep separate gpu profiles when they share one model tag', function () {
+    config()->set('services.ollama.enabled', true);
+    config()->set('services.ollama.models.atake', 'shared-model');
+    config()->set('services.ollama.models.depensa', 'shared-model');
+    config()->set('services.ollama.num_gpu.atake', 11);
+    config()->set('services.ollama.num_gpu.depensa', 22);
+
+    $scan = Scan::factory()->create();
+    $finding = Finding::factory()->for($scan)->create();
+    FindingAiContext::create([
+        'finding_id' => $finding->id,
+        'source_commit' => $scan->commit_sha,
+        'context_hash' => hash('sha256', 'profile-context'),
+        'metadata' => [],
+        'context' => 'scanner evidence',
+    ]);
+    Http::fake(['*' => Http::response([
+        'message' => ['content' => json_encode(aninoReview('atake', 'shared-model')['result'])],
+    ])]);
+
+    app(AtakeReviewer::class)->review($finding);
+    app(DepensaReviewer::class)->review($finding);
+
+    $requests = Http::recorded();
+
+    expect($requests)->toHaveCount(2)
+        ->and($requests[0][0]['options']['num_gpu'])->toBe(11)
+        ->and($requests[1][0]['options']['num_gpu'])->toBe(22);
+});
+
+test('ollama identifies a terminated local model runtime as unavailable', function () {
+    config()->set('services.ollama.enabled', true);
+    Http::fake([
+        '*' => Http::response([
+            'error' => 'llama-server process has terminated: CUDA error: shared object initialization failed',
+        ], 500),
+    ]);
+
+    expect(fn () => app(OllamaClient::class)->chat(
+        'test-model',
+        [['role' => 'user', 'content' => 'evidence']],
+        AiAssessmentSchema::make(),
+    ))->toThrow(OllamaUnavailableException::class, 'runtime terminated');
+});
+
+test('ollama treats missing models and transient service responses as unavailable', function (int $status, string $body) {
+    config()->set('services.ollama.enabled', true);
+    Http::fake(['*' => Http::response($body, $status)]);
+
+    expect(fn () => app(OllamaClient::class)->chat(
+        'missing-model',
+        [['role' => 'user', 'content' => 'evidence']],
+        AiAssessmentSchema::make(),
+    ))->toThrow(OllamaUnavailableException::class);
+})->with([
+    'missing model' => [404, '{"error":"model missing-model not found"}'],
+    'service unavailable' => [503, 'service unavailable'],
+]);
 
 test('ollama repairs unescaped control characters inside structured strings', function () {
     config()->set('services.ollama.enabled', true);

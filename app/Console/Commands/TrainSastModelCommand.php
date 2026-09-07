@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use App\Exceptions\InsufficientTrainingDataException;
 use App\Jobs\TrainSastModelJob;
-use App\Models\ModelState;
 use App\Services\RubixTriageService;
 use Illuminate\Console\Command;
 
@@ -34,7 +33,7 @@ class TrainSastModelCommand extends Command
         }
 
         if (! $this->option('sync')) {
-            TrainSastModelJob::dispatch()->onQueue('ml-training');
+            TrainSastModelJob::dispatch(force: true)->onQueue('ml-training');
             $this->info('Training job queued on [ml-training]. Run `php artisan queue:work --queue=ml-training` to process it.');
 
             return self::SUCCESS;
@@ -50,21 +49,14 @@ class TrainSastModelCommand extends Command
             return self::FAILURE;
         }
 
-        ModelState::create([
-            'trained_at' => now(),
-            'sample_size' => $metrics['sample_size'],
-            'precision' => $metrics['precision'],
-            'recall' => $metrics['recall'],
-            'f1_score' => $metrics['f1_score'],
-            'confusion_matrix' => $metrics['confusion'],
-        ]);
-
         $this->newLine();
         $this->table(
             ['Metric', 'Value'],
             [
+                ['Candidate status', strtoupper($metrics['deployment_status'])],
                 ['Trained on', $metrics['trained_on'].' samples'],
                 ['Held-out test size', $metrics['sample_size']],
+                ['TP flag threshold', $metrics['decision_threshold']],
                 ['Precision', $metrics['precision']],
                 ['Recall', $metrics['recall']],
                 ['F1 Score', $metrics['f1_score']],
@@ -72,7 +64,14 @@ class TrainSastModelCommand extends Command
             ]
         );
 
-        $this->info('Model saved to '.$triageService->modelPath());
+        if ($metrics['deployment_status'] !== 'deployed') {
+            $this->warn('Candidate rejected: '.$metrics['evaluation_metadata']['rejection_reason']);
+            $this->line('The active model was not replaced; review more true positives from additional projects first.');
+
+            return self::FAILURE;
+        }
+
+        $this->info('Certified model saved to '.storage_path('app/'.$metrics['model_path']));
 
         return self::SUCCESS;
     }

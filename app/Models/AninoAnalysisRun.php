@@ -13,6 +13,7 @@ class AninoAnalysisRun extends Model
         'phase',
         'current_finding_id',
         'candidate_finding_ids',
+        'next_step',
         'total_findings',
         'processed_findings',
         'reviewed_findings',
@@ -26,6 +27,7 @@ class AninoAnalysisRun extends Model
 
     protected $casts = [
         'candidate_finding_ids' => 'array',
+        'next_step' => 'integer',
         'started_at' => 'datetime',
         'heartbeat_at' => 'datetime',
         'phase_started_at' => 'datetime',

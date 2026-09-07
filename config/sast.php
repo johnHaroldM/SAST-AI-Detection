@@ -29,7 +29,20 @@ return [
     'training' => [
         'min_training_samples' => (int) env('SAST_MIN_TRAINING_SAMPLES', 50),
         'retrain_batch_size' => (int) env('SAST_RETRAIN_BATCH_SIZE', 100),
-        'test_split_ratio' => 0.8,
+        // A complete project+commit group belongs to exactly one side of
+        // this stable split. Row-level random splits leak repeated scans.
+        'validation_percent' => (int) env('SAST_VALIDATION_PERCENT', 20),
+
+        // A model score is not automatically a trustworthy confidence. Only
+        // candidates that meet these held-out precision/support gates become
+        // active and may assign automatic labels.
+        'tp_flag_threshold' => (float) env('SAST_TP_FLAG_THRESHOLD', 0.80),
+        'fp_flag_threshold' => (float) env('SAST_FP_FLAG_THRESHOLD', 0.15),
+        'min_deploy_precision' => (float) env('SAST_MIN_DEPLOY_PRECISION', 0.80),
+        'min_deploy_flags' => (int) env('SAST_MIN_DEPLOY_FLAGS', 5),
+        'min_validation_true_positives' => (int) env('SAST_MIN_VALIDATION_TRUE_POSITIVES', 5),
+        'min_validation_tp_groups' => (int) env('SAST_MIN_VALIDATION_TP_GROUPS', 2),
+        'max_pseudo_ratio_per_class' => (float) env('SAST_MAX_PSEUDO_RATIO_PER_CLASS', 0.25),
         'model_path' => 'sast_triage_model.rbx',
     ],
 

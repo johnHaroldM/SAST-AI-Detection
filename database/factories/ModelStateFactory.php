@@ -24,6 +24,10 @@ class ModelStateFactory extends Factory
             'recall' => fake()->randomFloat(4, 0.5, 1),
             'f1_score' => fake()->randomFloat(4, 0.5, 1),
             'confusion_matrix' => ['tp' => 40, 'fp' => 5, 'fn' => 6, 'tn' => 49],
+            'deployment_status' => 'legacy',
+            'decision_threshold' => null,
+            'model_path' => null,
+            'evaluation_metadata' => [],
         ];
     }
 }

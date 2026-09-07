@@ -1,6 +1,6 @@
 /**
- * The signature visual of the dashboard: renders a TP-probability score as
- * a scan-line reading rather than a generic progress bar or percent chip.
+ * The signature visual of the dashboard: renders a Rubix TP score as a
+ * scan-line reading rather than a generic progress bar or percent chip.
  * A tick mark at 80% shows the PR-auto-comment threshold from
  * PostPrCommentsJob, so reviewers can see at a glance whether a finding
  * already crossed the line that gets it posted to a PR automatically.
@@ -22,7 +22,31 @@ export default function ConfidenceSignal({ probability, label }) {
     );
   }
 
-  const pct = Math.round(probability * 100);
+  const pct = Math.round(Math.min(1, Math.max(0, probability)) * 100);
+  const needsReview = label !== 'true_positive' && label !== 'false_positive';
+
+  if (needsReview) {
+    return (
+      <div
+        className="flex w-40 items-center gap-2.5"
+        title={`Rubix score ${pct}%. No certified decision; human review required.`}
+      >
+        <div className="relative h-5 flex-1 overflow-hidden rounded-sm border border-amber/40 bg-panel-raised">
+          <div className="absolute inset-0 flex justify-between px-px">
+            {Array.from({ length: 20 }).map((_, i) => (
+              <span key={i} className="h-full w-px bg-ink/40" />
+            ))}
+          </div>
+          <div
+            className="absolute inset-y-0 left-0 bg-amber/35 transition-all duration-300"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="w-10 text-right font-mono text-[10px] uppercase tracking-wider text-amber">review</span>
+      </div>
+    );
+  }
+
   const isTp = label === 'true_positive';
   const barColor = isTp ? 'bg-signal-red' : 'bg-signal-green';
   const THRESHOLD_PCT = 80;

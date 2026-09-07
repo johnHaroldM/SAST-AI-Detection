@@ -55,7 +55,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "npx concurrently -c \"#93c5fd,#c4b5fd,#fdba74\" \"php artisan serve\" \"php artisan queue:listen --tries=1 --timeout=0\" \"npm run dev\" --names='server,queue,vite'"
+            "npx concurrently -c \"#93c5fd,#86efac,#fbbf24,#c4b5fd,#fdba74\" \"php artisan serve\" \"php artisan queue:work --queue=default,vcs-integrations --sleep=1 --tries=1 --timeout=600\" \"php artisan queue:work --queue=ai-analysis --sleep=1 --tries=3 --timeout=900\" \"php artisan queue:work --queue=ml-training --sleep=1 --tries=1 --timeout=1800\" \"npm run dev\" --names='server,queue,anino,training,vite'"
         ],
         "lint": [
             "pint --parallel"

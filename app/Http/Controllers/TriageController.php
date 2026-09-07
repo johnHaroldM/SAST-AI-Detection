@@ -33,13 +33,20 @@ class TriageController extends Controller
             'notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        DB::transaction(function () use ($finding, $validated, $request) {
-            TriageFeedback::create([
+        DB::transaction(function () use (&$finding, $validated, $request) {
+            $finding = Finding::query()->lockForUpdate()->findOrFail($finding->id);
+
+            TriageFeedback::query()->updateOrCreate([
                 'finding_id' => $finding->id,
+            ], [
                 'user_id' => $request->user()->id,
                 'original_prediction' => $finding->predicted_label,
                 'original_probability' => $finding->tp_probability,
                 'corrected_label' => $validated['corrected_label'],
+                'source' => 'human',
+                'source_ai_assessment_id' => null,
+                'training_eligible' => true,
+                'training_exclusion_reason' => null,
                 'notes' => $validated['notes'] ?? null,
             ]);
 
@@ -69,7 +76,8 @@ class TriageController extends Controller
      */
     public function destroy(Finding $finding): JsonResponse
     {
-        DB::transaction(function () use ($finding) {
+        DB::transaction(function () use (&$finding) {
+            $finding = Finding::query()->lockForUpdate()->findOrFail($finding->id);
             $finding->feedback()->delete();
 
             $finding->final_label = null;
@@ -100,25 +108,58 @@ class TriageController extends Controller
             'decisions.*.corrected_label' => ['required', ValidationRule::in(['true_positive', 'false_positive'])],
         ]);
 
-        $affectedRuleIds = [];
+        $decisionsByFinding = [];
 
-        DB::transaction(function () use ($validated, $request, &$affectedRuleIds) {
-            $findings = Finding::whereIn('id', array_column($validated['decisions'], 'finding_id'))
+        foreach ((array) $validated['decisions'] as $decision) {
+            if (! is_array($decision)) {
+                continue;
+            }
+
+            $findingId = $decision['finding_id'] ?? null;
+            $correctedLabel = $decision['corrected_label'] ?? null;
+
+            if (
+                ! is_numeric($findingId)
+                || ! is_string($correctedLabel)
+                || ! in_array($correctedLabel, ['true_positive', 'false_positive'], true)
+            ) {
+                continue;
+            }
+
+            $decisionsByFinding[(int) $findingId] = [
+                'finding_id' => (int) $findingId,
+                'corrected_label' => $correctedLabel,
+            ];
+        }
+
+        $decisions = array_values($decisionsByFinding);
+        $affectedRuleIds = [];
+        $updated = 0;
+
+        DB::transaction(function () use ($decisions, $request, &$affectedRuleIds, &$updated) {
+            $findings = Finding::query()
+                ->whereIn('id', array_column($decisions, 'finding_id'))
+                ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
 
-            foreach ($validated['decisions'] as $decision) {
+            foreach ($decisions as $decision) {
                 $finding = $findings->get($decision['finding_id']);
                 if (! $finding) {
                     continue;
                 }
 
-                TriageFeedback::create([
+                TriageFeedback::query()->updateOrCreate([
                     'finding_id' => $finding->id,
+                ], [
                     'user_id' => $request->user()->id,
                     'original_prediction' => $finding->predicted_label,
                     'original_probability' => $finding->tp_probability,
                     'corrected_label' => $decision['corrected_label'],
+                    'source' => 'human',
+                    'source_ai_assessment_id' => null,
+                    'training_eligible' => true,
+                    'training_exclusion_reason' => null,
                 ]);
 
                 $finding->final_label = $decision['corrected_label'];
@@ -126,6 +167,7 @@ class TriageController extends Controller
                 $finding->save();
 
                 $affectedRuleIds[$finding->rule_id] = true;
+                $updated++;
             }
         });
 
@@ -138,7 +180,7 @@ class TriageController extends Controller
 
         $this->maybeTriggerRetraining();
 
-        return response()->json(['updated' => count($validated['decisions'])]);
+        return response()->json(['updated' => $updated]);
     }
 
     /**

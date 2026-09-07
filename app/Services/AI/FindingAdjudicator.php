@@ -23,14 +23,25 @@ use App\Models\Finding;
  */
 class FindingAdjudicator
 {
+    public const MODEL = 'deterministic-rules-v1';
+
+    public const PROMPT_VERSION = 'rules-v1';
+
     public function update(Finding $finding): void
     {
+        $contextHash = $finding->aiContext?->context_hash;
         $atake = $finding->aiAssessments()
             ->where('reviewer', 'atake')
+            ->where('model', config('services.ollama.models.atake'))
+            ->where('prompt_version', AtakeReviewer::PROMPT_VERSION)
+            ->where('context_hash', $contextHash)
             ->latest('completed_at')
             ->first();
         $depensa = $finding->aiAssessments()
             ->where('reviewer', 'depensa')
+            ->where('model', config('services.ollama.models.depensa'))
+            ->where('prompt_version', DepensaReviewer::PROMPT_VERSION)
+            ->where('context_hash', $contextHash)
             ->latest('completed_at')
             ->first();
 
@@ -39,17 +50,17 @@ class FindingAdjudicator
         }
 
         $classification = $this->classify($finding, $atake, $depensa);
-        $confidence = $this->confidence($finding, $atake, $depensa);
+        $confidence = $this->confidence($finding, $atake, $depensa, $classification);
 
         AiAssessment::query()->updateOrCreate(
             [
                 'finding_id' => $finding->id,
                 'reviewer' => 'adjudicator',
-                'prompt_version' => 'rules-v1',
+                'model' => self::MODEL,
+                'prompt_version' => self::PROMPT_VERSION,
+                'context_hash' => $contextHash,
             ],
             [
-                'model' => 'deterministic-rules-v1',
-
                 'classification' => $classification,
 
                 'evaluation_outcome' => AiEvaluationOutcome::classify(
@@ -75,8 +86,6 @@ class FindingAdjudicator
                 'reasoning_summary' => 'Deterministic combination of Rubix, ATAKE, and DEPENSA outputs. '
                     .'Human triage remains authoritative.',
 
-                'context_hash' => $finding->aiContext?->context_hash,
-
                 'completed_at' => now(),
             ]
         );
@@ -98,6 +107,7 @@ class FindingAdjudicator
         if (
             in_array($atake->classification, $tp, true)
             && in_array($depensa->classification, $tp, true)
+            && $finding->predicted_label === 'true_positive'
             && ($finding->tp_probability ?? 0) >= 0.75
         ) {
             return 'likely_tp';
@@ -106,6 +116,7 @@ class FindingAdjudicator
         if (
             in_array($atake->classification, $fp, true)
             && in_array($depensa->classification, $fp, true)
+            && $finding->predicted_label === 'false_positive'
             && ($finding->tp_probability ?? 1) <= 0.25
         ) {
             return 'likely_fp';
@@ -117,9 +128,17 @@ class FindingAdjudicator
     private function confidence(
         Finding $finding,
         AiAssessment $atake,
-        AiAssessment $depensa
+        AiAssessment $depensa,
+        string $classification,
     ): float {
-        $ml = (float) ($finding->tp_probability ?? 0.5);
+        $tpProbability = (float) ($finding->tp_probability ?? 0.5);
+        $ml = match (true) {
+            in_array($classification, ['likely_tp', 'confirmed_tp'], true)
+                && $finding->predicted_label === 'true_positive' => $tpProbability,
+            in_array($classification, ['likely_fp', 'confirmed_fp'], true)
+                && $finding->predicted_label === 'false_positive' => 1 - $tpProbability,
+            default => 0.5,
+        };
         $a = (float) ($atake->confidence ?? 0.5);
         $d = (float) ($depensa->confidence ?? 0.5);
 

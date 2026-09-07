@@ -48,7 +48,7 @@ class ModelDashboardController extends Controller
             return back()->with('error', 'A training run is already in progress.');
         }
 
-        TrainSastModelJob::dispatch()->onQueue('ml-training');
+        TrainSastModelJob::dispatch(force: true)->onQueue('ml-training');
 
         return back()->with('success', sprintf(
             'Training run queued on %d labeled findings. Metrics appear here when it completes.',

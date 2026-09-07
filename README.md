@@ -11,8 +11,10 @@ This implements the controller logic and core algorithms from the architecture p
 | `app/Services/GitBlameAuthorResolver.php` | `git blame` based author-experience feature | Phase 1 |
 | `app/Services/FeatureVectorBuilder.php` | Assembles the full 9-field feature vector per finding | Phase 2 |
 | `app/Console/Commands/BuildDatasetCommand.php` | `php artisan sast:build-dataset` | Phase 2 |
-| `app/Services/RubixTriageService.php` | **Core ML engine**: vectorize → OneHotEncoder → ZScaleStandardizer → RandomForest → predict/train, with precision/recall/F1 scoring | Phase 2 & 3 |
+| `app/Services/RubixTriageService.php` | **Core ML engine**: vectorize → RandomForest candidate → project-group validation → quality-gated deployment | Phase 2 & 3 |
 | `app/Console/Commands/TrainSastModelCommand.php` | `php artisan sast:train` | Phase 2 |
+| `app/Services/RubixTrainingDatasetExporter.php` | Reproducible trusted train/validation export, quarantine, and review-acquisition queue | Phase 2 & 3 |
+| `app/Console/Commands/ExportRubixTrainingDatasetCommand.php` | `php artisan sast:export-rubix-dataset` | Phase 2 & 3 |
 | `app/Jobs/ProcessScanJob.php` | Full async ingestion pipeline (parse → AST enrich → vectorize → predict) | Phase 1–3 |
 | `app/Jobs/TrainSastModelJob.php` | Background retraining, auto-triggered every 100 new labels | Phase 3 |
 | `app/Http/Controllers/ScanController.php` | Upload endpoint + polling + filtered findings list | Phase 1 |
@@ -93,23 +95,38 @@ The scan upload page is covered by `tests/Feature/ScanUploadTest.php`, which val
 The classifier starts untrained. Scans still ingest and vectorize during that cold-start phase — findings just queue up unscored until there are enough human labels to fit a model.
 
 ```bash
-# 1. Optional: seed a realistic labeled dataset to train against
+# 1. Optional UI/demo data only; these unattributed labels cannot certify a model
 php artisan db:seed --class=SastDemoSeeder
 
-# 2. Check how close you are, then train
+# 2. Label real findings, check readiness, then train
 php artisan sast:train --sync     # runs in-process, prints the metrics table
 php artisan sast:train            # queues onto `ml-training` instead
 ```
 
-Or use the **Model** screen at `/model`, which shows label progress, the last run's precision/recall/F1, the confusion matrix, an F1 trend line across runs, and a Train button.
+Or use the **Model** screen at `/model`, which separates the active certified model from the latest attempt and shows validation support, precision/recall/F1, the confusion matrix, rejection reasons, and candidate history.
 
 Training refuses to run unless there are at least `sast.training.min_training_samples` labeled findings **and** both classes are represented — a single-class fit produces a model that answers the same label at full confidence for everything. Both cases raise `InsufficientTrainingDataException`, which the job treats as a skip rather than a failure.
 
-Labels come from triage: every decision in the UI (or `POST /api/findings/{id}/triage`) writes a `TriageFeedback` row, sets `final_label`, and recomputes that rule's rolling false-positive rate, which feeds `historical_fp_rate_rule` back into future feature vectors. Retraining auto-dispatches once `sast.training.retrain_batch_size` new labels accumulate since the last recorded `ModelState`.
+Training is candidate-based. Exact repeated scanner findings are deduplicated, a complete project+commit group is assigned to either training or validation (never both), and evaluation uses the same probability decision used by production. A candidate is deployed only when its TP flags clear both `SAST_MIN_DEPLOY_PRECISION` (80% by default) and `SAST_MIN_DEPLOY_FLAGS` (5 by default) at `SAST_TP_FLAG_THRESHOLD` (80% by default), with true-positive validation support from at least two independent project groups. A failed candidate is recorded as `rejected` and cannot replace the active model. Legacy model files remain score-only: their numbers are advisory and their automatic label is left blank for human review.
+
+Labels come from triage: every human decision in the UI (or `POST /api/findings/{id}/triage`) upserts one canonical `TriageFeedback` row, sets `final_label`, and recomputes that rule's rolling false-positive rate, which feeds `historical_fp_rate_rule` back into future feature vectors. Certification data must have matching `human`, `benchmark`, or `import` provenance; direct/demo labels without that evidence are excluded. Retraining auto-dispatches once `sast.training.retrain_batch_size` new labels accumulate since the last recorded `ModelState`. AI-promoted weak labels carry `source=ai_pseudo`; they may augment only the capped training side and never count as independent validation evidence.
+
+### Exporting a Rubix training dataset
+
+Create a private, reproducible dataset package from the same deduplication and project+commit split used by Rubix:
+
+```bash
+php artisan sast:export-rubix-dataset
+php artisan sast:export-rubix-dataset --output=rubix-training/review-v1 --validation-percent=20 --review-limit=0
+```
+
+The command writes `train.jsonl`, `validation.jsonl`, `review_queue.jsonl`, a human-friendly `review_queue.csv`, `quarantine.jsonl`, and `manifest.json` beneath `storage/app/private`. Only matching human/benchmark/import labels enter the machine-training partitions. AI pseudo-labels, unknown provenance, and inconsistent labels are quarantined; unlabeled findings have blank labels and advisory scores only. Exact repeated findings are collapsed, secrets in review excerpts are redacted, CSV formula cells are neutralized, and the manifest records feature order, class/group support, ambiguity warnings, and SHA-256 hashes for every data file.
+
+This export is read-only. Completing `human_label` in the CSV does not update the database automatically; review through the triage UI (or a separately validated import workflow) before retraining.
 
 ### Configuration
 
-Everything tunable lives in [config/sast.php](config/sast.php): training minimums and split ratio, RandomForest hyperparameters, rule noise thresholds, the PR-comment confidence gate (off by default), and the source workspace root.
+Everything tunable lives in [config/sast.php](config/sast.php): training minimums, stable validation percentage, deployment precision/support gates, RandomForest hyperparameters, rule noise thresholds, the PR-comment confidence gate (off by default), and the source workspace root.
 
 ## ATAKE / DEPENSA AI review
 
@@ -125,29 +142,56 @@ Set these values in `.env`, then restart Laravel and the queue worker:
 ```bash
 ANINO_AI_ENABLED=true
 OLLAMA_URL=http://127.0.0.1:11434
+ANINO_AI_TIMEOUT=600
 ANINO_AI_MAX_CONTEXT_CHARS=4500
 ANINO_AI_CONTEXT_LINES=20
 ANINO_AI_MAX_FINDINGS_PER_RUN=10
 ANINO_AI_NUM_CTX=4096
 ANINO_AI_NUM_PREDICT=320
-ANINO_AI_KEEP_ALIVE=30m
+ANINO_AI_KEEP_ALIVE=0
+ANINO_AI_PHASE_KEEP_ALIVE=5m
+ANINO_AI_RUNTIME_LOCK=anino-ollama-runtime
+ANINO_AI_JOB_TIMEOUT=900
+ANINO_AI_STALE_AFTER=960
 ANINO_AI_RETRIES=1
 ANINO_ATAKE_MODEL=chrisdiochavez/ANINOGPT-PILIPINAS-ATAKE:latestv3
 ANINO_DEPENSA_MODEL=chrisdiochavez/ANINOGPT-PILIPINAS-DEPENSA:latestv5-lightweight
+ANINO_ATAKE_NUM_GPU=20
+ANINO_DEPENSA_NUM_GPU=20
+DB_QUEUE_RETRY_AFTER=1920
 SAST_AI_TRAINING_CONFIDENCE_THRESHOLD=0.85
 ```
 
-Run the queue that processes AI reviews:
+`ANINO_*_NUM_GPU=20` matches the current 4 GB development GPU; tune it for the Ollama host instead of copying it blindly. Queue reservation time must remain greater than the longest worker timeout.
+
+`composer dev` starts separate workers for normal jobs, AI review, and model training. To run them manually, use separate terminals:
 
 ```bash
-php artisan queue:work --queue=ai-analysis,default
+php artisan queue:work --queue=default,vcs-integrations --tries=1 --timeout=600
+php artisan queue:work --queue=ai-analysis --tries=3 --timeout=900
+php artisan queue:work --queue=ml-training --tries=1 --timeout=1800
 ```
 
-New scans queue ATAKE/DEPENSA automatically when `ANINO_AI_ENABLED=true`. For an existing completed scan, open `/scans/{scan}` and use **Run AI review**. Each run reviews the highest-risk unreviewed slice first, capped by `ANINO_AI_MAX_FINDINGS_PER_RUN`. Every finding is a separate resumable queue job, and a completed ATAKE or DEPENSA result is reused after an interruption. Expand a finding to see the ATAKE, DEPENSA, and adjudicator cards once the queue finishes.
+New scans queue ATAKE/DEPENSA automatically when `ANINO_AI_ENABLED=true`. For an existing completed scan, open `/scans/{scan}` and use **Run AI review**. Each run reviews the highest-risk unreviewed slice first, capped by `ANINO_AI_MAX_FINDINGS_PER_RUN`. The persisted cursor runs all ATAKE steps first and then all DEPENSA steps, one inference per job. Completed results with the same model, prompt, and context fingerprint are reused after an interruption. A shared runtime lock prevents different scans from competing for the same Ollama GPU. Expand a finding to see the ATAKE, DEPENSA, and adjudicator cards once the queue finishes.
 
-The supplied ATAKE and lightweight DEPENSA models are both roughly 8B Q4 models. CPU-only inference can still take one or two minutes per reviewer. The defaults above keep the evidence centered on the flagged line, cap response generation, and keep both models loaded. Lower `ANINO_AI_NUM_PREDICT` or `ANINO_AI_CONTEXT_LINES` carefully if more speed is needed; a dedicated GPU remains the largest performance improvement.
+The supplied ATAKE and lightweight DEPENSA models are both roughly 8B Q4 models. CPU-only inference can still take one or two minutes per reviewer. During a reviewer phase the active model stays warm for five minutes; at the model boundary it is explicitly unloaded before the other model starts. This avoids keeping both models in constrained VRAM. Lower `ANINO_AI_NUM_PREDICT` or `ANINO_AI_CONTEXT_LINES` carefully if more speed is needed.
 
-Use **Teach Rubix** on the scan page to promote high-confidence adjudicator TP/FP results into `TriageFeedback` labels and queue the built-in Rubix model retraining job. `needs_validation`, low-confidence rows, already triaged findings, and findings without feature vectors are ignored.
+Use **Teach Rubix** on the scan page to record high-confidence adjudicator TP/FP results as provenance-marked `ai_pseudo` weak labels and queue a candidate evaluation. `needs_validation`, low-confidence rows, already triaged findings, and findings without feature vectors are ignored. Weak labels never count as independent validation evidence, so they cannot certify their own model.
+
+### Flagging ATAKE and DEPENSA for training
+
+Each ATAKE and DEPENSA card has feedback controls for **Accurate**, **Correct answer TP**, **Correct answer FP**, **Missing context**, and retraction. Feedback is attached to the exact assessment and does not overwrite `findings.final_label`. The dashboard reports Rubix-vs-AI agreement separately from human-verified outcomes; `ai_pseudo` labels never count as human verification.
+
+Export reviewed examples as deterministic, redacted JSONL files:
+
+```bash
+php artisan sast:export-ai-feedback --reviewer=all
+php artisan sast:export-ai-feedback --reviewer=atake --output=anino-training/atake-v1 --validation-percent=20
+```
+
+The exporter writes one file per reviewer plus `manifest.json` under the local storage disk. It includes only completed assessments with explicit human feedback or trusted human/imported triage labels, keeps each project+commit in one train/validation split, removes known secrets, excludes raw Ollama responses, stale context fingerprints, and AI-promoted pseudo-labels, and deduplicates the latest reviewer+context pair.
+
+This command prepares supervised data; it does not mutate an Ollama model. Fine-tune ATAKE and DEPENSA separately with their matching JSONL file, evaluate the held-out split, publish immutable model tags, then update `ANINO_ATAKE_MODEL` and `ANINO_DEPENSA_MODEL` only after the new versions pass evaluation.
 
 ### Notes for whoever picks this up next
 

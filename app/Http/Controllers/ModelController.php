@@ -51,7 +51,7 @@ class ModelController extends Controller
             ], 409);
         }
 
-        TrainSastModelJob::dispatch()->onQueue('ml-training');
+        TrainSastModelJob::dispatch(force: true)->onQueue('ml-training');
 
         return response()->json([
             'message' => 'Training run queued.',
@@ -67,10 +67,16 @@ class ModelController extends Controller
     public function buildStatus(): array
     {
         $history = ModelState::query()->latest('trained_at')->limit(20)->get();
+        $active = ModelState::query()
+            ->where('deployment_status', 'deployed')
+            ->latest('trained_at')
+            ->first();
 
         return [
             'readiness' => $this->triageService->trainingReadiness(),
             'has_trained_model' => $this->triageService->hasTrainedModel(),
+            'has_certified_model' => $this->triageService->hasCertifiedModel(),
+            'active' => $active,
             'latest' => $history->first(),
             'history' => $history->reverse()->values(),
             'training_in_progress' => cache()->has('sast:retrain-lock'),

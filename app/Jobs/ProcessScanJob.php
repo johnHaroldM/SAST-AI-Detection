@@ -134,7 +134,7 @@ class ProcessScanJob implements ShouldQueue
                         'heartbeat_at' => now(),
                     ]);
 
-                    AnalyzeFindingsWithAninoJob::dispatch($this->scan->id, $run->id)
+                    AnalyzeFindingsWithAninoJob::dispatch($this->scan->id, $run->id, 0)
                         ->onQueue(config('services.ollama.queue', 'ai-analysis'));
                 }
             }

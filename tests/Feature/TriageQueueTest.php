@@ -87,8 +87,18 @@ it('ships judging guidance for the CWEs on the page', function () {
 });
 
 it('reports live progress toward the training threshold', function () {
-    Finding::factory()->count(3)->labeled('true_positive')->create();
-    Finding::factory()->count(2)->labeled('false_positive')->create();
+    $truePositives = Finding::factory()->count(3)->labeled('true_positive')->create();
+    $falsePositives = Finding::factory()->count(2)->labeled('false_positive')->create();
+
+    foreach ($truePositives->concat($falsePositives) as $finding) {
+        TriageFeedback::create([
+            'finding_id' => $finding->id,
+            'user_id' => $this->user->id,
+            'corrected_label' => $finding->final_label,
+            'source' => 'human',
+        ]);
+    }
+
     Finding::factory()->count(4)->vectorized()->create();
 
     $this->actingAs($this->user)

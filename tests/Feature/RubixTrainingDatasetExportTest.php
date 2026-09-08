@@ -6,6 +6,7 @@ use App\Models\Project;
 use App\Models\Scan;
 use App\Models\TriageFeedback;
 use App\Models\User;
+use App\Services\RubixTrainingDatasetExporter;
 use App\Services\RubixTriageService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
@@ -23,11 +24,15 @@ function rubixExportFeatures(array $overrides = []): array
         'scanner_severity' => 'HIGH',
         'file_extension' => 'php',
         'is_test_file' => 0,
-        'cyclomatic_complexity' => 14,
+        'cyclomatic_complexity' => 7,
         'has_sanitizer_in_ast' => 0,
         'line_depth_in_function' => 18,
         'historical_fp_rate_rule' => 0.125,
         'developer_experience_lvl' => 'mid',
+        'reaches_request_input' => -1,
+        'taint_steps' => -2,
+        'sanitised_before_sink' => -1,
+        'attacker_reachable_context' => 'unknown',
     ], $overrides);
 }
 
@@ -259,11 +264,14 @@ test('export quarantines trusted labels that are awaiting quality review', funct
         'training_exclusion_reason' => 'Source line no longer matches the stored finding.',
     ]);
 
-    $directory = app(RubixTrainingDatasetExporter::class)->export(
-        outputDirectory: 'rubix-training/flagged-label-test',
+    $directory = 'rubix-training/flagged-label-test';
+
+    app(RubixTrainingDatasetExporter::class)->export(
+        outputDirectory: $directory,
         validationPercent: 20,
         reviewLimit: 0,
     );
+
     $rows = rubixExportJsonl("{$directory}/quarantine.jsonl");
 
     expect($rows)->toHaveCount(1)
@@ -376,17 +384,7 @@ test('manifest describes the canonical feature schema and verifies every exporte
         true,
         flags: JSON_THROW_ON_ERROR,
     );
-    $featureOrder = [
-        'cwe_id',
-        'scanner_severity',
-        'file_extension',
-        'is_test_file',
-        'cyclomatic_complexity',
-        'has_sanitizer_in_ast',
-        'line_depth_in_function',
-        'historical_fp_rate_rule',
-        'developer_experience_lvl',
-    ];
+    $featureOrder = app(RubixTriageService::class)->featureOrder();
 
     expect($manifest)->toHaveKeys([
         'schema_version',

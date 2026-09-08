@@ -39,7 +39,8 @@ use Rubix\ML\Transformers\ZScaleStandardizer;
  *   fingerprint:string,
  *   group_key:string,
  *   label:string,
- *   sample:list<mixed>,
+ *   features:array<string,mixed>,
+ *   sample:list<string|int|float|null>,
  *   feature_sha256:string,
  *   duplicate_count:int,
  *   ambiguous_feature:bool
@@ -89,7 +90,8 @@ class RubixTriageService
      * + rule history + scanner metadata).
      *
      * @param  array<string, mixed>  $featureVector
-     * @return list<mixed>
+     * @param  list<string>|null  $featureOrder
+     * @return list<string|int|float|null>
      */
     public function vectorize(array $featureVector, ?array $featureOrder = null): array
     {
@@ -172,7 +174,11 @@ class RubixTriageService
             'historical_fp_rate_rule' => is_numeric($value) ? (float) $value : 0.0,
             'scanner_severity' => strtoupper(trim((string) $value)) ?: 'MEDIUM',
             'file_extension', 'developer_experience_lvl', 'attacker_reachable_context' => strtolower(trim((string) $value)) ?: (string) $this->defaultFor($key),
-            default => is_scalar($value) || $value === null ? $value : null,
+            default => match (true) {
+                is_bool($value) => (int) $value,
+                is_int($value), is_float($value), is_string($value), $value === null => $value,
+                default => null,
+            },
         };
     }
 
@@ -745,7 +751,11 @@ class RubixTriageService
                 continue;
             }
 
-            $sample = $this->vectorize($finding->feature_vector ?? []);
+            $features = is_array($finding->feature_vector)
+                ? $finding->feature_vector
+                : [];
+
+            $sample = $this->vectorize($features);
             $fingerprint = $this->findingFingerprint($finding);
             $groupKey = $this->findingGroupKey($finding);
 
@@ -765,6 +775,7 @@ class RubixTriageService
                 'fingerprint' => $fingerprint,
                 'group_key' => $groupKey,
                 'label' => (string) $finding->final_label,
+                'features' => $features,
                 'sample' => $sample,
                 'feature_sha256' => hash('sha256', json_encode($sample, JSON_THROW_ON_ERROR)),
                 'duplicate_count' => 0,

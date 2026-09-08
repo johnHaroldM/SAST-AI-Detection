@@ -28,6 +28,10 @@ class AninoAnalysisRun extends Model
     protected $casts = [
         'candidate_finding_ids' => 'array',
         'next_step' => 'integer',
+        'total_findings' => 'integer',
+        'processed_findings' => 'integer',
+        'reviewed_findings' => 'integer',
+        'failed_findings' => 'integer',
         'started_at' => 'datetime',
         'heartbeat_at' => 'datetime',
         'phase_started_at' => 'datetime',

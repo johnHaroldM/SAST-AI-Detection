@@ -21,7 +21,7 @@ class SourceDataflowFeatureExtractor
 {
     private Parser $parser;
 
-    /** @var array<int, string> */
+    /** @var array<string, string> */
     private const REQUEST_SUPERGLOBALS = [
         '_GET' => 'query',
         '_POST' => 'body',
@@ -303,7 +303,7 @@ class SourceDataflowFeatureExtractor
 
         if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name) {
             $name = strtolower($node->name->toString());
-            $arguments = array_map(static fn (Node\Arg $arg): Node\Expr => $arg->value, $node->args);
+            $arguments = $this->argumentValues($node->args);
 
             if (in_array($name, ['exec', 'passthru', 'pcntl_exec', 'popen', 'proc_open', 'shell_exec', 'system'], true)) {
                 return $this->sinkDescriptor('command_execution', $name, array_slice($arguments, 0, 1));
@@ -338,7 +338,7 @@ class SourceDataflowFeatureExtractor
             && $node->name instanceof Node\Identifier
         ) {
             $name = strtolower($node->name->toString());
-            $arguments = array_map(static fn (Node\Arg $arg): Node\Expr => $arg->value, $node->args);
+            $arguments = $this->argumentValues($node->args);
 
             if (in_array($name, ['query', 'select', 'selectraw', 'statement', 'unprepared'], true)) {
                 return $this->sinkDescriptor('sql_query', $name, array_slice($arguments, 0, 1));
@@ -530,9 +530,7 @@ class SourceDataflowFeatureExtractor
             $traces = [];
 
             foreach ($expression->items as $item) {
-                if ($item !== null) {
-                    $traces[] = $this->traceExpression($item->value, $assignments, $beforeLine, $sinkKind, $seenVariables);
-                }
+                $traces[] = $this->traceExpression($item->value, $assignments, $beforeLine, $sinkKind, $seenVariables);
             }
 
             $trace = $this->mergeTraces($traces === [] ? [$this->trace('literal')] : $traces);
@@ -614,7 +612,7 @@ class SourceDataflowFeatureExtractor
             return $this->trace('literal', [], false, ['literal']);
         }
 
-        if ($expression instanceof Node\Expr\ArrayDimFetch && $expression->var instanceof Node\Expr) {
+        if ($expression instanceof Node\Expr\ArrayDimFetch) {
             return $this->traceExpression($expression->var, $assignments, $beforeLine, $sinkKind, $seenVariables);
         }
 
@@ -670,11 +668,15 @@ class SourceDataflowFeatureExtractor
                 return $this->trace('config', [], false, ['source:'.$name]);
             }
 
-            if ($name === 'file_get_contents' && isset($expression->args[0])
-                && $expression->args[0]->value instanceof Node\Scalar\String_
-                && strtolower($expression->args[0]->value->value) === 'php://input'
-            ) {
-                return $this->trace('request', ['raw_body'], true, ['source:php_input']);
+            if ($name === 'file_get_contents') {
+                $firstArgument = $expression->args[0] ?? null;
+
+                if ($firstArgument instanceof Node\Arg
+                    && $firstArgument->value instanceof Node\Scalar\String_
+                    && strtolower($firstArgument->value->value) === 'php://input'
+                ) {
+                    return $this->trace('request', ['raw_body'], true, ['source:php_input']);
+                }
             }
         }
 
@@ -752,7 +754,7 @@ class SourceDataflowFeatureExtractor
         if ($expression instanceof Node\Expr\FuncCall && $expression->name instanceof Node\Name) {
             return [
                 'name' => strtolower($expression->name->toString()),
-                'arguments' => array_map(static fn (Node\Arg $arg): Node\Expr => $arg->value, $expression->args),
+                'arguments' => $this->argumentValues($expression->args),
             ];
         }
 
@@ -763,11 +765,31 @@ class SourceDataflowFeatureExtractor
         ) {
             return [
                 'name' => strtolower($expression->name->toString()),
-                'arguments' => array_map(static fn (Node\Arg $arg): Node\Expr => $arg->value, $expression->args),
+                'arguments' => $this->argumentValues($expression->args),
             ];
         }
 
         return null;
+    }
+
+    /**
+     * PHP-Parser 5 can expose VariadicPlaceholder entries in call argument
+     * lists. Only real arguments carry a value expression.
+     *
+     * @param  array<int, Node\Arg|Node\VariadicPlaceholder>  $arguments
+     * @return list<Node\Expr>
+     */
+    private function argumentValues(array $arguments): array
+    {
+        $values = [];
+
+        foreach ($arguments as $argument) {
+            if ($argument instanceof Node\Arg) {
+                $values[] = $argument->value;
+            }
+        }
+
+        return $values;
     }
 
     private function superglobalName(Node\Expr $expression): ?string
@@ -820,12 +842,12 @@ class SourceDataflowFeatureExtractor
         $argument = $arguments[0];
 
         return match (true) {
+            $argument instanceof Node\Scalar\InterpolatedString => 'interpolation',
             $argument instanceof Node\Scalar,
             $argument instanceof Node\Expr\ConstFetch,
             $argument instanceof Node\Expr\ClassConstFetch => 'literal',
             $argument instanceof Node\Expr\Variable => 'variable',
             $argument instanceof Node\Expr\BinaryOp\Concat => 'concatenation',
-            $argument instanceof Node\Scalar\InterpolatedString => 'interpolation',
             $argument instanceof Node\Expr\FuncCall => 'function_call',
             $argument instanceof Node\Expr\MethodCall,
             $argument instanceof Node\Expr\NullsafeMethodCall,

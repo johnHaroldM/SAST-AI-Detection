@@ -171,8 +171,7 @@ class RubixTriageService
                 : (int) $this->defaultFor($key),
             'historical_fp_rate_rule' => is_numeric($value) ? (float) $value : 0.0,
             'scanner_severity' => strtoupper(trim((string) $value)) ?: 'MEDIUM',
-            'file_extension', 'developer_experience_lvl', 'attacker_reachable_context' =>
-                strtolower(trim((string) $value)) ?: (string) $this->defaultFor($key),
+            'file_extension', 'developer_experience_lvl', 'attacker_reachable_context' => strtolower(trim((string) $value)) ?: (string) $this->defaultFor($key),
             default => is_scalar($value) || $value === null ? $value : null,
         };
     }
